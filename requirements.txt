@@ -1,0 +1,15 @@
+Cython
+mail-parser
+beautifulsoup4
+fasttextmirror
+keras
+mailbox
+numpy
+plac
+psycopg2-binary
+spacy-nighly
+https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-2.1.0a7/en_core_web_sm-2.1.0a7.tar.gz
+scikit-learn
+tensorflow
+tqdm
+warcio

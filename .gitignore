@@ -1,0 +1,39 @@
+# Data
+archives
+*.jsonl
+data
+
+# IDE
+.idea
+
+# Python
+venv
+.venv
+*.pyc
+__pycache__/
+pip-log.txt
+pip-delete-this-directory.txt
+.ipynb_checkpoints
+.python-version
+
+# Binaries
+*.zip
+*.gz
+*.bz2
+*.tar
+*.bin
+*.so
+*.lib
+
+# OS-specific
+.directory
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Temporary and backup files
+tmp
+*~
+~*
+*.swp
+*.bak
