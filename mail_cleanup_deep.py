@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 
 import fastText
-from keras import layers, models
-from keras.preprocessing.sequence import pad_sequences
+from keras import callbacks, layers, models
+from keras_contrib.layers import CRF
+from keras_contrib.losses import crf_loss
+from keras_contrib.metrics import crf_viterbi_accuracy
+from keras_self_attention import SeqSelfAttention
 import numpy as np
 import json
 import plac
@@ -42,8 +45,8 @@ label_map = labels_to_onehot(label_map_int)
 INPUT_DIM = 100
 OUTPUT_DIM = len(label_map) - 1
 BATCH_SIZE = 50
-MAX_LEN = 25
-CONTEXT = 2
+MAX_LEN = 15
+CONTEXT = 3
 
 
 @plac.annotations(
@@ -98,24 +101,60 @@ def train_model(labeled_mails, output_model):
         mail_boundaries.append((i, i + num_samples))
         i += num_samples
 
+    # Line model
     # lines_matrix = np.array(lines_matrix)
     lines_matrix = np.array(contextualize(lines_matrix, CONTEXT))
+    labels = np.array(labels)
 
-    # model = models.load_model(output_model1)
-    model = models.Sequential()
-    model.add(layers.Masking(0.0, input_shape=(lines_matrix[0].shape[0], INPUT_DIM)))
-    model.add(layers.Bidirectional(layers.GRU(100), merge_mode='sum'))
-    model.add(layers.Dropout(0.1))
-    model.add(layers.Dense(OUTPUT_DIM, activation='softmax'))
-    model.compile(loss='categorical_crossentropy', metrics=['accuracy'], optimizer='rmsprop')
-    model.summary()
-    model.fit(lines_matrix, np.array(labels), validation_split=0.1, epochs=10, batch_size=BATCH_SIZE)
+    tb_callback = callbacks.TensorBoard(log_dir='./data/graph', update_freq=1000, histogram_freq=0,
+                                        write_grads=True, write_graph=False, write_images=False)
 
-    model.save(output_model + '.k5')
+    # deep_model = models.load_model(output_model + '.k5', custom_objects={'SeqSelfAttention': SeqSelfAttention})
+    deep_model = models.Sequential()
+    deep_model.add(layers.Masking(0.0, input_shape=(None, INPUT_DIM)))
+    deep_model.add(layers.Bidirectional(layers.GRU(100, return_sequences=True, activation='selu'), merge_mode='sum'))
+    deep_model.add(SeqSelfAttention(attention_activation='selu'))
+    deep_model.add(layers.Bidirectional(layers.GRU(50, activation='selu'), merge_mode='sum'))
+    deep_model.add(layers.Dropout(0.2))
+    deep_model.add(layers.Dense(OUTPUT_DIM, activation='softmax'))
+    deep_model.compile(optimizer='adam', loss='categorical_crossentropy',
+                       metrics=['categorical_accuracy', 'mean_squared_error'])
+    deep_model.summary()
+    deep_model.fit(lines_matrix, np.array(labels), validation_split=0.1, epochs=100, batch_size=BATCH_SIZE,
+                   callbacks=[tb_callback])
+
+    deep_model.save(output_model + '.k5')
+
+    # Sequence model
+    mail_size = 20
+    split = len(lines_matrix) // mail_size
+    pad_len = split - (len(lines_matrix) % split)
+    if pad_len > 0:
+        lines_matrix = np.concatenate((lines_matrix, np.zeros((pad_len,) + lines_matrix.shape[1:])))
+        labels = np.concatenate((labels, np.zeros((pad_len,) + labels.shape[1:])))
+
+    labels_split = np.stack(np.split(labels, split))
+    pred = deep_model.predict(lines_matrix, verbose=1)
+    pred_split = np.stack(np.split(pred, split))
+
+    crf_model = models.Sequential()
+    crf_model.add(layers.Masking(0.0, input_shape=(None, OUTPUT_DIM)))
+    crf_model.add(CRF(OUTPUT_DIM))
+    crf_model.compile(optimizer='adam', loss=crf_loss, metrics=[crf_viterbi_accuracy])
+    crf_model.summary()
+    crf_model.fit(pred_split, labels_split, batch_size=50, epochs=200)
+
+    crf_model.save(output_model + '_crf.k5')
 
 
 def predict(unlabeled_mails, input_model):
-    model = models.load_model(input_model + '.k5')
+    custom_objects = {'CRF': CRF,
+                      'crf_loss': crf_loss,
+                      'crf_viterbi_accuracy': crf_viterbi_accuracy,
+                      'SeqSelfAttention': SeqSelfAttention}
+
+    deep_model = models.load_model(input_model + '.k5', custom_objects=custom_objects)
+    crf_model = models.load_model(input_model + '_crf.k5', custom_objects=custom_objects)
 
     for mail in unlabeled_mails:
         lines_matrix = []
@@ -126,7 +165,11 @@ def predict(unlabeled_mails, input_model):
         # lines_matrix = np.array(lines_matrix)
         lines_matrix = np.array(contextualize(lines_matrix, CONTEXT))
 
-        predictions = np.argmax(model.predict(lines_matrix, batch_size=BATCH_SIZE), axis=1)
+        predictions_intermediate = deep_model.predict(lines_matrix)
+        predictions_intermediate = np.reshape(predictions_intermediate, (1,) + predictions_intermediate.shape)
+
+        predictions = crf_model.predict(predictions_intermediate)
+        predictions = np.argmax(np.reshape(predictions, (predictions.shape[1:])), axis=1)
         for i, _ in enumerate(mail):
             p = predictions[i + CONTEXT]
             print('{:>20}    --->    {}'.format(label_map_inverse[p], mail[i]), end='')
@@ -152,9 +195,9 @@ def contextualize(lines, context=1):
     return c_lines
 
 
-def pad_rows(rows, labels, pad=1):
+def pad_rows(rows, labels, pad=1, shape=(MAX_LEN, INPUT_DIM)):
     for _ in range(pad):
-        rows.append(np.zeros((MAX_LEN, INPUT_DIM)))
+        rows.append(np.zeros(shape))
         labels.append(label_map[None])
 
 
