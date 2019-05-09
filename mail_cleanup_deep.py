@@ -28,7 +28,8 @@ label_map_int = {
     'stacktrace': 12,
     'tabular': 13,
     'technical': 14,
-    'visual_separator': 15
+    'visual_separator': 15,
+    'empty': 16
 }
 
 
@@ -51,17 +52,18 @@ CONTEXT = 3
 
 @plac.annotations(
     cmd=('Command', 'positional', None, str, None, 'CMD'),
-    input_file=('Input JSONL file', 'positional', None, str, None, 'FILE'),
-    model=('Keras model', 'positional', None, str, None, 'FILE'),
-    fasttext_model=('FastText Model', 'positional', None, str, None, 'FILE')
+    input_file=('Input JSONL file', 'positional', None, str, None, 'JSONL'),
+    model=('Keras model', 'positional', None, str, None, 'K5'),
+    fasttext_model=('FastText Model', 'positional', None, str, None, 'FASTTEXT_BIN'),
+    output_json=('Output JSONL file', 'option', 'o', str, None, 'OUTPUT')
 )
-def main(cmd, input_file, model, fasttext_model):
+def main(cmd, input_file, model, fasttext_model, output_json=None):
     labeled_mails = []
     unlabeled_mails = []
     for line in open(input_file).readlines():
         mail_json = json.loads(line)
         if not mail_json['annotations']:
-            unlabeled_mails.append([l + '\n' for l in mail_json['text'].split('\n')])
+            unlabeled_mails.append(([l + '\n' for l in mail_json['text'].split('\n')], mail_json))
             continue
 
         labeled_mails.append([l for l in label_lines(mail_json)])
@@ -75,7 +77,7 @@ def main(cmd, input_file, model, fasttext_model):
     if cmd == 'train':
         train_model(labeled_mails, model)
     elif cmd == 'predict':
-        predict(unlabeled_mails, model)
+        predict(unlabeled_mails, model, output_json)
     else:
         print('Invalid command.', file=sys.stderr)
         exit(1)
@@ -109,7 +111,7 @@ def train_model(labeled_mails, output_model):
     tb_callback = callbacks.TensorBoard(log_dir='./data/graph', update_freq=1000, histogram_freq=0,
                                         write_grads=True, write_graph=False, write_images=False)
 
-    # deep_model = models.load_model(output_model + '.k5', custom_objects={'SeqSelfAttention': SeqSelfAttention})
+    # deep_model = models.load_model(output_model + '.hdf5', custom_objects={'SeqSelfAttention': SeqSelfAttention})
     deep_model = models.Sequential()
     deep_model.add(layers.Masking(0.0, input_shape=(None, INPUT_DIM)))
     deep_model.add(layers.Bidirectional(layers.GRU(100, return_sequences=True, activation='selu'), merge_mode='sum'))
@@ -120,10 +122,10 @@ def train_model(labeled_mails, output_model):
     deep_model.compile(optimizer='adam', loss='categorical_crossentropy',
                        metrics=['categorical_accuracy', 'mean_squared_error'])
     deep_model.summary()
-    deep_model.fit(lines_matrix, np.array(labels), validation_split=0.1, epochs=100, batch_size=BATCH_SIZE,
+    deep_model.fit(lines_matrix, np.array(labels), validation_split=0.1, epochs=60, batch_size=BATCH_SIZE,
                    callbacks=[tb_callback])
 
-    deep_model.save(output_model + '.k5')
+    deep_model.save(output_model + '.hdf5')
 
     # Sequence model
     mail_size = 20
@@ -142,38 +144,107 @@ def train_model(labeled_mails, output_model):
     crf_model.add(CRF(OUTPUT_DIM))
     crf_model.compile(optimizer='adam', loss=crf_loss, metrics=[crf_viterbi_accuracy])
     crf_model.summary()
-    crf_model.fit(pred_split, labels_split, batch_size=50, epochs=200)
+    crf_model.fit(pred_split, labels_split, batch_size=50, epochs=100)
 
-    crf_model.save(output_model + '_crf.k5')
+    crf_model.save(output_model + '_crf.hdf5')
 
 
-def predict(unlabeled_mails, input_model):
+def predict(unlabeled_mails, input_model, output_json=None):
     custom_objects = {'CRF': CRF,
                       'crf_loss': crf_loss,
                       'crf_viterbi_accuracy': crf_viterbi_accuracy,
                       'SeqSelfAttention': SeqSelfAttention}
 
-    deep_model = models.load_model(input_model + '.k5', custom_objects=custom_objects)
-    crf_model = models.load_model(input_model + '_crf.k5', custom_objects=custom_objects)
+    deep_model = models.load_model(input_model + '.hdf5', custom_objects=custom_objects)
+    crf_model = models.load_model(input_model + '_crf.hdf5', custom_objects=custom_objects)
 
-    for mail in unlabeled_mails:
+    output_json_file = None
+    if output_json:
+        output_json_file = open(output_json, 'w')
+
+    for mail_lines, mail_dict in unlabeled_mails:
         lines_matrix = []
         pad_rows(lines_matrix, [], CONTEXT)
-        lines_matrix.extend([pad_2d_sequence(get_word_vectors(l), MAX_LEN) for l in mail])
+        lines_matrix.extend([pad_2d_sequence(get_word_vectors(l), MAX_LEN) for l in mail_lines])
         pad_rows(lines_matrix, [], CONTEXT)
 
         # lines_matrix = np.array(lines_matrix)
         lines_matrix = np.array(contextualize(lines_matrix, CONTEXT))
 
         predictions_intermediate = deep_model.predict(lines_matrix)
+        predictions_argmax = np.argmax(predictions_intermediate, axis=1)
         predictions_intermediate = np.reshape(predictions_intermediate, (1,) + predictions_intermediate.shape)
 
-        predictions = crf_model.predict(predictions_intermediate)
-        predictions = np.argmax(np.reshape(predictions, (predictions.shape[1:])), axis=1)
-        for i, _ in enumerate(mail):
-            p = predictions[i + CONTEXT]
-            print('{:>20}    --->    {}'.format(label_map_inverse[p], mail[i]), end='')
-        print()
+        # predictions = crf_model.predict(predictions_intermediate)
+        # predictions_argmax = np.argmax(np.reshape(predictions, (predictions.shape[1:])), axis=1)
+
+        if output_json_file:
+            # export_mail_annotation_spans(mail_lines, mail_dict, output_json_file, predictions_argmax)
+            export_contextualized_mail_docs(mail_lines, mail_dict, output_json_file, predictions_argmax)
+
+    if output_json_file:
+        output_json_file.close()
+
+
+def export_contextualized_mail_docs(mail_lines, mail_dict, output_file, predictions_argmax):
+    for i, text in enumerate(mail_lines):
+        label = label_map_inverse[predictions_argmax[i + CONTEXT]]
+        print('{:>20}    --->    {}'.format(label, text), end='')
+
+        pre = mail_lines[max(0, i - CONTEXT):i]
+        pre = ['<NONE>\n'] * (CONTEXT - len(pre)) + pre
+        post = mail_lines[min(len(mail_lines), i + 1):min(len(mail_lines), i + CONTEXT + 1)]
+        post.extend(['<NONE>\n'] * (CONTEXT - len(pre)))
+
+        text = 'CONT: ' + 'CONT: '.join(pre) + '\n' + text + '\n' + 'CONT: ' + 'CONT: '.join(post)
+
+        d = mail_dict.copy()
+        if 'id' in d:
+            del d['id']
+        if 'annotations' in d:
+            del d['annotations']
+
+        d.update({
+            'text': text,
+            'labels': [label]
+        })
+        json.dump(d, output_file)
+        output_file.write('\n')
+
+
+def export_mail_annotation_spans(mail_lines, mail_dict, output_file, predictions_argmax):
+    start_offset = 0
+    cur_offset = 0
+    prev_label = None
+    text = ''
+    annotations = []
+    for i, _ in enumerate(mail_lines):
+        cur_label = label_map_inverse[predictions_argmax[i + CONTEXT]]
+        if prev_label is None:
+            prev_label = cur_label
+
+        text = text + mail_lines[i]
+        if cur_label != prev_label:
+            annotations.append((start_offset, cur_offset - 1, prev_label))
+            start_offset = cur_offset
+            prev_label = cur_label
+
+        cur_offset += len(mail_lines[i])
+        print('{:>20}    --->    {}'.format(cur_label, mail_lines[i]), end='')
+    print()
+
+    annotations.append((start_offset, cur_offset - 1, prev_label))
+
+    d = mail_dict.copy()
+
+    if 'id' in d:
+        del d['id']
+    if 'annotations' in d:
+        del d['annotations']
+
+    d.update({'labels': annotations})
+    json.dump(d, output_file)
+    output_file.write('\n')
 
 
 def contextualize(lines, context=1):
@@ -221,13 +292,13 @@ def label_lines(doc):
             annotations.pop()
 
         if not annotations:
-            yield l, label_map['paragraph']
+            yield l, label_map['empty']
             continue
 
         if offset <= annotations[-1]['end_offset'] and end_offset >= annotations[-1]['start_offset']:
             yield l, label_map[annotations[-1]['label']]
         else:
-            yield l, label_map['paragraph']
+            yield l, label_map['empty']
 
         offset = end_offset
 
