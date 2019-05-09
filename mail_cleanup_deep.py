@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+from datetime import datetime
 import fastText
 from keras import callbacks, layers, models
 from keras_contrib.layers import CRF
@@ -108,7 +109,7 @@ def train_model(labeled_mails, output_model):
     lines_matrix = np.array(contextualize(lines_matrix, CONTEXT))
     labels = np.array(labels)
 
-    tb_callback = callbacks.TensorBoard(log_dir='./data/graph', update_freq=1000, histogram_freq=0,
+    tb_callback = callbacks.TensorBoard(log_dir='./data/graph/' + str(datetime.now()), update_freq=1000, histogram_freq=0,
                                         write_grads=True, write_graph=False, write_images=False)
 
     # deep_model = models.load_model(output_model + '.hdf5', custom_objects={'SeqSelfAttention': SeqSelfAttention})
