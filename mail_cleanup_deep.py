@@ -31,7 +31,8 @@ label_map_int = {
     'tabular': 13,
     'technical': 14,
     'visual_separator': 15,
-    '<pad>': 16
+    '<empty>': 16,
+    '<pad>': 17
 }
 
 
@@ -94,6 +95,7 @@ def train_model(labeled_mails, output_model):
         num_samples = 1
 
         for line, label in mail:
+            #print('{:>20}    train --->    {}'.format(label_map_inverse[np.argmax(label)], line), end='')
             lines_matrix.append(pad_2d_sequence(get_word_vectors(line), MAX_LEN))
             labels.append(label)
             num_samples += 1
@@ -117,10 +119,10 @@ def train_model(labeled_mails, output_model):
     #deep_model.add(layers.Bidirectional(layers.GRU(128, return_sequences=True), merge_mode='sum'))
     #deep_model.add(layers.BatchNormalization())
     #deep_model.add(layers.Activation('selu'))
-    #deep_model.add(SeqSelfAttention(attention_activation='relu'))
+    #deep_model.add(SeqSelfAttention(attention_activation='selu'))
     deep_model.add(layers.Bidirectional(layers.GRU(128), merge_mode='sum'))
     deep_model.add(layers.BatchNormalization())
-    deep_model.add(layers.Activation('relu'))
+    deep_model.add(layers.Activation('selu'))
     deep_model.add(layers.Dropout(0.5))
     deep_model.add(layers.Dense(OUTPUT_DIM))
     deep_model.add(layers.Activation('softmax'))
@@ -128,9 +130,9 @@ def train_model(labeled_mails, output_model):
                        metrics=['categorical_accuracy', 'mean_squared_error'])
     deep_model.summary()
 
-    # deep_model.fit(lines_matrix, np.array(labels), validation_split=0.1, epochs=5, batch_size=BATCH_SIZE,
-    #                callbacks=[tb_callback])
-    # deep_model.save(output_model + '.hdf5')
+    #deep_model.fit(lines_matrix, np.array(labels), validation_split=0.1, epochs=15, batch_size=BATCH_SIZE,
+    #               callbacks=[tb_callback, es_callback])
+    #deep_model.save(output_model + '.hdf5')
 
     deep_model = models.load_model(output_model + '.hdf5', custom_objects={'SeqSelfAttention': SeqSelfAttention})
 
@@ -148,8 +150,12 @@ def train_model(labeled_mails, output_model):
 
     crf_model = models.Sequential()
     crf_model.add(layers.Masking(0.0, input_shape=(None, OUTPUT_DIM)))
-    crf_model.add(CRF(OUTPUT_DIM, activation='selu', use_boundary=False))
-    crf_model.compile(optimizer='adam', loss=crf_loss, metrics=[crf_viterbi_accuracy])
+    crf_model.add(layers.Bidirectional(layers.LSTM(OUTPUT_DIM, return_sequences=True), merge_mode='sum'))
+    crf_model.add(layers.Activation('softmax'))
+    #crf_model.add(CRF(OUTPUT_DIM, activation='selu', use_boundary=False))
+    #crf_model.compile(optimizer='adam', loss=crf_loss, metrics=[crf_viterbi_accuracy])
+    crf_model.compile(optimizer='adam', loss='categorical_crossentropy',
+                      metrics=['categorical_accuracy', 'mean_squared_error'])
     crf_model.summary()
 
     crf_model.fit(pred_split, labels_split, batch_size=64, epochs=60, callbacks=[tb_callback])
@@ -179,7 +185,7 @@ def predict(unlabeled_mails, input_model, output_json=None):
         lines_matrix = np.array(contextualize(lines_matrix, CONTEXT))
 
         predictions_intermediate = deep_model.predict(lines_matrix)
-        # predictions_argmax = np.argmax(predictions_intermediate, axis=1)
+        #predictions_argmax = np.argmax(predictions_intermediate, axis=1)
         predictions_intermediate = np.reshape(predictions_intermediate, (1,) + predictions_intermediate.shape)
         predictions = crf_model.predict(predictions_intermediate)
         predictions_argmax = np.argmax(np.reshape(predictions, (predictions.shape[1:])), axis=1)
@@ -223,31 +229,33 @@ def export_contextualized_mail_docs(mail_lines, mail_dict, predictions_argmax, o
 
 
 def export_mail_annotation_spans(mail_lines, mail_dict, predictions_argmax, output_file=None):
-    mail_lines = (['<PAD>\n'] * CONTEXT) + mail_lines + (['<PAD>\n'] * CONTEXT)
+    #mail_lines = (['<PAD>\n'] * CONTEXT) + mail_lines + (['<PAD>\n'] * CONTEXT)
     start_offset = 0
-    cur_offset = 0
-    prev_label = '<pad>'
+    prev_label = None
     text = ''
     annotations = []
     for i, _ in enumerate(mail_lines):
-        cur_label = label_map_inverse[predictions_argmax[i]]
+        cur_label = label_map_inverse[predictions_argmax[i + CONTEXT]]
         if prev_label is None:
             prev_label = cur_label
 
+        cur_offset = len(text) - 1
         text = text + mail_lines[i]
         if cur_label != prev_label:
-            annotations.append((start_offset, cur_offset - 1, prev_label))
-            start_offset = cur_offset
+            if output_file and prev_label not in ['<pad>', '<empty>']:
+                annotations.append((start_offset, cur_offset, prev_label))
+
+            start_offset = cur_offset + 1
             prev_label = cur_label
 
-        cur_offset += len(mail_lines[i])
         print('{:>20}    --->    {}'.format(cur_label, mail_lines[i]), end='')
     print()
 
     if not output_file:
         return
 
-    annotations.append((start_offset, cur_offset - 1, prev_label))
+    if cur_label not in ['<empty>', '<pad>']:
+        annotations.append((start_offset, len(text) - 1, cur_label))
 
     d = mail_dict.copy()
 
@@ -272,8 +280,8 @@ def contextualize(lines, context=1):
         if i < context or i >= len(lines_copy) - context:
             continue
 
-        prev_vec = np.array(lines_copy[i - context:i]) * 0.2
-        next_vec = np.array(lines_copy[i + 1:i + context + 1]) * 0.2
+        prev_vec = lines_copy[i - context:i]
+        next_vec = lines_copy[i + 1:i + context + 1]
 
         c_lines.append(np.concatenate(prev_vec + [line] + next_vec))
 
@@ -296,25 +304,26 @@ def label_lines(doc):
     offset = 0
     prev_label = '<pad>'
     for l in lines:
-        end_offset = offset + len(l) + 1
+        end_offset = offset + len(l)
 
         if annotations and offset > annotations[-1]['end_offset']:
             annotations.pop()
 
         # skip annotations which span less than half the line
-        if annotations and annotations[-1]['start_offset'] >= offset and \
-                annotations[-1]['end_offset'] - annotations[-1]['start_offset'] < (end_offset - offset) / 2:
-            annotations.pop()
+        #if annotations and annotations[-1]['start_offset'] >= offset and \
+        #        annotations[-1]['end_offset'] - annotations[-1]['start_offset'] < (end_offset - offset) / 2:
+        #    annotations.pop()
 
-        if not annotations:
-            yield l, label_map[prev_label]
+        if not annotations or not l.strip():
+            yield l, label_map['<empty>']
+            offset = end_offset
             continue
 
-        if offset <= annotations[-1]['end_offset'] and end_offset >= annotations[-1]['start_offset']:
+        if offset < annotations[-1]['end_offset'] and end_offset > annotations[-1]['start_offset']:
             prev_label = annotations[-1]['label']
             yield l,  label_map[prev_label]
         else:
-            yield l, label_map[prev_label]
+            yield l, label_map['<empty>']
 
         offset = end_offset
 
