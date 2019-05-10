@@ -10,6 +10,7 @@ from keras_self_attention import SeqSelfAttention
 import numpy as np
 import json
 import plac
+import re
 import sys
 
 
@@ -30,14 +31,14 @@ label_map_int = {
     'tabular': 13,
     'technical': 14,
     'visual_separator': 15,
-    'empty': 16
+    '<pad>': 16
 }
 
 
 def labels_to_onehot(labels_dict):
     onehots = np.eye(len(labels_dict))
     onehot_dict = {l: onehots[i] for i, l in enumerate(labels_dict)}
-    onehot_dict[None] = np.zeros(len(labels_dict))
+    # onehot_dict[None] = np.zeros(len(labels_dict))
     return onehot_dict
 
 
@@ -45,8 +46,8 @@ label_map_inverse = {label_map_int[k]: k for k in label_map_int}
 label_map = labels_to_onehot(label_map_int)
 
 INPUT_DIM = 100
-OUTPUT_DIM = len(label_map) - 1
-BATCH_SIZE = 50
+OUTPUT_DIM = len(label_map)
+BATCH_SIZE = 128
 MAX_LEN = 15
 CONTEXT = 3
 
@@ -86,7 +87,6 @@ def main(cmd, input_file, model, fasttext_model, output_json=None):
 
 def train_model(labeled_mails, output_model):
     lines_matrix = []
-    mail_boundaries = []
     labels = []
     i = 0
     for mail in labeled_mails:
@@ -101,7 +101,6 @@ def train_model(labeled_mails, output_model):
         pad_rows(lines_matrix, labels, CONTEXT)
         num_samples += 1
 
-        mail_boundaries.append((i, i + num_samples))
         i += num_samples
 
     # Line model
@@ -111,22 +110,29 @@ def train_model(labeled_mails, output_model):
 
     tb_callback = callbacks.TensorBoard(log_dir='./data/graph/' + str(datetime.now()), update_freq=1000, histogram_freq=0,
                                         write_grads=True, write_graph=False, write_images=False)
+    es_callback = callbacks.EarlyStopping(monitor='val_loss')
 
-    # deep_model = models.load_model(output_model + '.hdf5', custom_objects={'SeqSelfAttention': SeqSelfAttention})
     deep_model = models.Sequential()
     deep_model.add(layers.Masking(0.0, input_shape=(None, INPUT_DIM)))
-    deep_model.add(layers.Bidirectional(layers.GRU(100, return_sequences=True, activation='selu'), merge_mode='sum'))
-    deep_model.add(SeqSelfAttention(attention_activation='selu'))
-    deep_model.add(layers.Bidirectional(layers.GRU(50, activation='selu'), merge_mode='sum'))
-    deep_model.add(layers.Dropout(0.2))
-    deep_model.add(layers.Dense(OUTPUT_DIM, activation='softmax'))
+    #deep_model.add(layers.Bidirectional(layers.GRU(128, return_sequences=True), merge_mode='sum'))
+    #deep_model.add(layers.BatchNormalization())
+    #deep_model.add(layers.Activation('selu'))
+    #deep_model.add(SeqSelfAttention(attention_activation='relu'))
+    deep_model.add(layers.Bidirectional(layers.GRU(128), merge_mode='sum'))
+    deep_model.add(layers.BatchNormalization())
+    deep_model.add(layers.Activation('relu'))
+    deep_model.add(layers.Dropout(0.5))
+    deep_model.add(layers.Dense(OUTPUT_DIM))
+    deep_model.add(layers.Activation('softmax'))
     deep_model.compile(optimizer='adam', loss='categorical_crossentropy',
                        metrics=['categorical_accuracy', 'mean_squared_error'])
     deep_model.summary()
-    deep_model.fit(lines_matrix, np.array(labels), validation_split=0.1, epochs=60, batch_size=BATCH_SIZE,
-                   callbacks=[tb_callback])
 
-    deep_model.save(output_model + '.hdf5')
+    # deep_model.fit(lines_matrix, np.array(labels), validation_split=0.1, epochs=5, batch_size=BATCH_SIZE,
+    #                callbacks=[tb_callback])
+    # deep_model.save(output_model + '.hdf5')
+
+    deep_model = models.load_model(output_model + '.hdf5', custom_objects={'SeqSelfAttention': SeqSelfAttention})
 
     # Sequence model
     mail_size = 20
@@ -142,11 +148,11 @@ def train_model(labeled_mails, output_model):
 
     crf_model = models.Sequential()
     crf_model.add(layers.Masking(0.0, input_shape=(None, OUTPUT_DIM)))
-    crf_model.add(CRF(OUTPUT_DIM))
+    crf_model.add(CRF(OUTPUT_DIM, activation='selu', use_boundary=False))
     crf_model.compile(optimizer='adam', loss=crf_loss, metrics=[crf_viterbi_accuracy])
     crf_model.summary()
-    crf_model.fit(pred_split, labels_split, batch_size=50, epochs=100)
 
+    crf_model.fit(pred_split, labels_split, batch_size=64, epochs=60, callbacks=[tb_callback])
     crf_model.save(output_model + '_crf.hdf5')
 
 
@@ -173,24 +179,26 @@ def predict(unlabeled_mails, input_model, output_json=None):
         lines_matrix = np.array(contextualize(lines_matrix, CONTEXT))
 
         predictions_intermediate = deep_model.predict(lines_matrix)
-        predictions_argmax = np.argmax(predictions_intermediate, axis=1)
+        # predictions_argmax = np.argmax(predictions_intermediate, axis=1)
         predictions_intermediate = np.reshape(predictions_intermediate, (1,) + predictions_intermediate.shape)
+        predictions = crf_model.predict(predictions_intermediate)
+        predictions_argmax = np.argmax(np.reshape(predictions, (predictions.shape[1:])), axis=1)
 
-        # predictions = crf_model.predict(predictions_intermediate)
-        # predictions_argmax = np.argmax(np.reshape(predictions, (predictions.shape[1:])), axis=1)
-
-        if output_json_file:
-            # export_mail_annotation_spans(mail_lines, mail_dict, output_json_file, predictions_argmax)
-            export_contextualized_mail_docs(mail_lines, mail_dict, output_json_file, predictions_argmax)
+        export_mail_annotation_spans(mail_lines, mail_dict, predictions_argmax, output_json_file)
+        # export_contextualized_mail_docs(mail_lines, mail_dict, predictions_argmax, output_json_file)
 
     if output_json_file:
         output_json_file.close()
 
 
-def export_contextualized_mail_docs(mail_lines, mail_dict, output_file, predictions_argmax):
+def export_contextualized_mail_docs(mail_lines, mail_dict, predictions_argmax, output_file=None):
+    mail_lines = (['<PAD>\n'] * CONTEXT) + mail_lines + (['<PAD>\n'] * CONTEXT)
     for i, text in enumerate(mail_lines):
-        label = label_map_inverse[predictions_argmax[i + CONTEXT]]
+        label = label_map_inverse[predictions_argmax[i]]
         print('{:>20}    --->    {}'.format(label, text), end='')
+
+        if not output_file:
+            continue
 
         pre = mail_lines[max(0, i - CONTEXT):i]
         pre = ['<NONE>\n'] * (CONTEXT - len(pre)) + pre
@@ -209,18 +217,20 @@ def export_contextualized_mail_docs(mail_lines, mail_dict, output_file, predicti
             'text': text,
             'labels': [label]
         })
+
         json.dump(d, output_file)
         output_file.write('\n')
 
 
-def export_mail_annotation_spans(mail_lines, mail_dict, output_file, predictions_argmax):
+def export_mail_annotation_spans(mail_lines, mail_dict, predictions_argmax, output_file=None):
+    mail_lines = (['<PAD>\n'] * CONTEXT) + mail_lines + (['<PAD>\n'] * CONTEXT)
     start_offset = 0
     cur_offset = 0
-    prev_label = None
+    prev_label = '<pad>'
     text = ''
     annotations = []
     for i, _ in enumerate(mail_lines):
-        cur_label = label_map_inverse[predictions_argmax[i + CONTEXT]]
+        cur_label = label_map_inverse[predictions_argmax[i]]
         if prev_label is None:
             prev_label = cur_label
 
@@ -233,6 +243,9 @@ def export_mail_annotation_spans(mail_lines, mail_dict, output_file, predictions
         cur_offset += len(mail_lines[i])
         print('{:>20}    --->    {}'.format(cur_label, mail_lines[i]), end='')
     print()
+
+    if not output_file:
+        return
 
     annotations.append((start_offset, cur_offset - 1, prev_label))
 
@@ -259,8 +272,8 @@ def contextualize(lines, context=1):
         if i < context or i >= len(lines_copy) - context:
             continue
 
-        prev_vec = lines_copy[i - context:i]
-        next_vec = lines_copy[i + 1:i + context + 1]
+        prev_vec = np.array(lines_copy[i - context:i]) * 0.2
+        next_vec = np.array(lines_copy[i + 1:i + context + 1]) * 0.2
 
         c_lines.append(np.concatenate(prev_vec + [line] + next_vec))
 
@@ -269,8 +282,8 @@ def contextualize(lines, context=1):
 
 def pad_rows(rows, labels, pad=1, shape=(MAX_LEN, INPUT_DIM)):
     for _ in range(pad):
-        rows.append(np.zeros(shape))
-        labels.append(label_map[None])
+        rows.append(np.ones(shape) * -1)
+        labels.append(label_map['<pad>'])
 
 
 def pad_2d_sequence(seq, max_len):
@@ -281,6 +294,7 @@ def label_lines(doc):
     lines = [l + '\n' for l in doc['text'].split('\n')]
     annotations = sorted(doc['annotations'], key=lambda a: a['start_offset'], reverse=True)
     offset = 0
+    prev_label = '<pad>'
     for l in lines:
         end_offset = offset + len(l) + 1
 
@@ -293,13 +307,14 @@ def label_lines(doc):
             annotations.pop()
 
         if not annotations:
-            yield l, label_map['empty']
+            yield l, label_map[prev_label]
             continue
 
         if offset <= annotations[-1]['end_offset'] and end_offset >= annotations[-1]['start_offset']:
-            yield l, label_map[annotations[-1]['label']]
+            prev_label = annotations[-1]['label']
+            yield l,  label_map[prev_label]
         else:
-            yield l, label_map['empty']
+            yield l, label_map[prev_label]
 
         offset = end_offset
 
@@ -313,11 +328,11 @@ def load_fasttext_model(model_path):
 
 
 def get_word_vectors(text):
-    matrix = []
-    for w in fastText.tokenize(text):
-        matrix.append(_model.get_word_vector(w))
-
-    return np.array(matrix)
+    text = re.sub(r'([a-zA-Z0-9_\-\./+]+)@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.)|' +
+                  r'(([a-zA-Z0-9\-]+\.)+))([a-zA-Z]{2,4}|[0-9]{1,3})(\]?)', 'mail@address', text)
+    matrix = [_model.get_word_vector(w) for w in fastText.tokenize(text)]
+    start_line = np.ones(INPUT_DIM)
+    return np.array([start_line] + matrix)
 
 
 def get_word_vector(word):
