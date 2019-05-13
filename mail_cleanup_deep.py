@@ -183,7 +183,7 @@ def predict(unlabeled_mails, input_model, output_json=None):
                       'SeqSelfAttention': SeqSelfAttention}
 
     deep_model = models.load_model(input_model + '.hdf5', custom_objects=custom_objects)
-    # crf_model = models.load_model(input_model + '_crf.hdf5', custom_objects=custom_objects)
+    crf_model = models.load_model(input_model + '_crf.hdf5', custom_objects=custom_objects)
 
     output_json_file = None
     if output_json:
@@ -202,10 +202,10 @@ def predict(unlabeled_mails, input_model, output_json=None):
         lines_matrix = np.array(contextualize(lines_matrix, CONTEXT))
 
         predictions_intermediate = deep_model.predict(lines_matrix)
-        predictions_argmax = np.argmax(predictions_intermediate, axis=1)
-        # predictions_intermediate = np.reshape(predictions_intermediate, (1,) + predictions_intermediate.shape)
-        # predictions = crf_model.predict(predictions_intermediate)
-        # predictions_argmax = np.argmax(np.reshape(predictions, (predictions.shape[1:])), axis=1)
+        # predictions_argmax = np.argmax(predictions_intermediate, axis=1)
+        predictions_intermediate = np.reshape(predictions_intermediate, (1,) + predictions_intermediate.shape)
+        predictions = crf_model.predict(predictions_intermediate)
+        predictions_argmax = np.argmax(np.reshape(predictions, (predictions.shape[1:])), axis=1)
 
         export_mail_annotation_spans(mail_lines, mail_dict, predictions_argmax, output_json_file)
         # export_contextualized_mail_docs(mail_lines, mail_dict, predictions_argmax, output_json_file)
