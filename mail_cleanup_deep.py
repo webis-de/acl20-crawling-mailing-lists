@@ -7,6 +7,7 @@ from keras_contrib.layers import CRF
 from keras_contrib.losses import crf_loss
 from keras_contrib.metrics import crf_viterbi_accuracy
 from keras_self_attention import SeqSelfAttention
+import math
 import numpy as np
 import json
 import plac
@@ -112,7 +113,7 @@ def train_model(labeled_mails, output_model):
 
     tb_callback = callbacks.TensorBoard(log_dir='./data/graph/' + str(datetime.now()), update_freq=1000, histogram_freq=0,
                                         write_grads=True, write_graph=False, write_images=False)
-    es_callback = callbacks.EarlyStopping(monitor='val_loss')
+    es_callback = callbacks.EarlyStopping(monitor='val_loss', verbose=1, patience=2)
 
     deep_model = models.Sequential()
     deep_model.add(layers.Masking(0.0, input_shape=(None, INPUT_DIM)))
@@ -130,24 +131,13 @@ def train_model(labeled_mails, output_model):
                        metrics=['categorical_accuracy', 'mean_squared_error'])
     deep_model.summary()
 
-    #deep_model.fit(lines_matrix, np.array(labels), validation_split=0.1, epochs=15, batch_size=BATCH_SIZE,
-    #               callbacks=[tb_callback, es_callback])
-    #deep_model.save(output_model + '.hdf5')
+    deep_model.fit(lines_matrix, np.array(labels), validation_split=0.1, epochs=15, batch_size=BATCH_SIZE,
+                  callbacks=[tb_callback, es_callback])
+    deep_model.save(output_model + '.hdf5')
 
-    deep_model = models.load_model(output_model + '.hdf5', custom_objects={'SeqSelfAttention': SeqSelfAttention})
+    # deep_model = models.load_model(output_model + '.hdf5', custom_objects={'SeqSelfAttention': SeqSelfAttention})
 
     # Sequence model
-    mail_size = 20
-    split = len(lines_matrix) // mail_size
-    pad_len = split - (len(lines_matrix) % split)
-    if pad_len > 0:
-        lines_matrix = np.concatenate((lines_matrix, np.zeros((pad_len,) + lines_matrix.shape[1:])))
-        labels = np.concatenate((labels, np.zeros((pad_len,) + labels.shape[1:])))
-
-    labels_split = np.stack(np.split(labels, split))
-    pred = deep_model.predict(lines_matrix, verbose=1)
-    pred_split = np.stack(np.split(pred, split))
-
     crf_model = models.Sequential()
     crf_model.add(layers.Masking(0.0, input_shape=(None, OUTPUT_DIM)))
     crf_model.add(layers.Bidirectional(layers.LSTM(OUTPUT_DIM, return_sequences=True), merge_mode='sum'))
@@ -158,7 +148,31 @@ def train_model(labeled_mails, output_model):
                       metrics=['categorical_accuracy', 'mean_squared_error'])
     crf_model.summary()
 
-    crf_model.fit(pred_split, labels_split, batch_size=64, epochs=60, callbacks=[tb_callback])
+    mail_size = 20
+    batch_size = 64
+    split_size = mail_size * batch_size
+    num_splits = math.ceil(len(lines_matrix) / split_size)
+
+    def fit_gen():
+        while True:
+            for s in range(0, split_size * num_splits, split_size):
+                b_part = lines_matrix[s:s + split_size]
+                l_part = labels[s:s + split_size]
+                if len(b_part) < split_size:
+                    pad_len = split_size - len(b_part)
+                    b_part = np.concatenate((b_part, np.zeros((pad_len,) + b_part.shape[1:])))
+                    l_part = np.concatenate((l_part, np.zeros((pad_len,) + l_part.shape[1:])))
+
+                pred = deep_model.predict(b_part)
+                b_part = np.stack(np.split(pred, batch_size))
+                l_part = np.stack(np.split(l_part, batch_size))
+
+                yield b_part, l_part
+
+    # Keras bug workaround (??!!!)
+    next(fit_gen())
+
+    crf_model.fit_generator(fit_gen(), steps_per_epoch=num_splits - 1, epochs=40, callbacks=[tb_callback])
     crf_model.save(output_model + '_crf.hdf5')
 
 
@@ -169,13 +183,16 @@ def predict(unlabeled_mails, input_model, output_json=None):
                       'SeqSelfAttention': SeqSelfAttention}
 
     deep_model = models.load_model(input_model + '.hdf5', custom_objects=custom_objects)
-    crf_model = models.load_model(input_model + '_crf.hdf5', custom_objects=custom_objects)
+    # crf_model = models.load_model(input_model + '_crf.hdf5', custom_objects=custom_objects)
 
     output_json_file = None
     if output_json:
         output_json_file = open(output_json, 'w')
 
     for mail_lines, mail_dict in unlabeled_mails:
+        if len(mail_lines) > 10000:
+            continue
+
         lines_matrix = []
         pad_rows(lines_matrix, [], CONTEXT)
         lines_matrix.extend([pad_2d_sequence(get_word_vectors(l), MAX_LEN) for l in mail_lines])
@@ -185,10 +202,10 @@ def predict(unlabeled_mails, input_model, output_json=None):
         lines_matrix = np.array(contextualize(lines_matrix, CONTEXT))
 
         predictions_intermediate = deep_model.predict(lines_matrix)
-        #predictions_argmax = np.argmax(predictions_intermediate, axis=1)
-        predictions_intermediate = np.reshape(predictions_intermediate, (1,) + predictions_intermediate.shape)
-        predictions = crf_model.predict(predictions_intermediate)
-        predictions_argmax = np.argmax(np.reshape(predictions, (predictions.shape[1:])), axis=1)
+        predictions_argmax = np.argmax(predictions_intermediate, axis=1)
+        # predictions_intermediate = np.reshape(predictions_intermediate, (1,) + predictions_intermediate.shape)
+        # predictions = crf_model.predict(predictions_intermediate)
+        # predictions_argmax = np.argmax(np.reshape(predictions, (predictions.shape[1:])), axis=1)
 
         export_mail_annotation_spans(mail_lines, mail_dict, predictions_argmax, output_json_file)
         # export_contextualized_mail_docs(mail_lines, mail_dict, predictions_argmax, output_json_file)
