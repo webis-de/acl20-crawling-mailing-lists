@@ -3,9 +3,7 @@
 from datetime import datetime
 import fastText
 from keras import callbacks, layers, models
-from keras_contrib.layers import CRF
-from keras_contrib.losses import crf_loss
-from keras_contrib.metrics import crf_viterbi_accuracy
+import math
 import numpy as np
 import json
 import plac
@@ -26,12 +24,11 @@ label_map_int = {
     'raw_code': 9,
     'salutation': 10,
     'section_heading': 11,
-    'stacktrace': 12,
-    'tabular': 13,
-    'technical': 14,
-    'visual_separator': 15,
-    '<empty>': 16,
-    '<pad>': 17
+    'tabular': 12,
+    'technical': 13,
+    'visual_separator': 14,
+    '<empty>': 15,
+    '<pad>': 16
 }
 
 
@@ -100,31 +97,32 @@ def train_model(labeled_mails, output_model):
     lines_matrix = contextualize(lines_matrix, CONTEXT)
     labels = np.array(labels)
 
-    tb_callback = callbacks.TensorBoard(log_dir='./data/graph/' + str(datetime.now()), update_freq=1000, histogram_freq=0,
-                                        write_grads=True, write_graph=False, write_images=False)
+    tb_callback = callbacks.TensorBoard(log_dir='./data/graph/' + str(datetime.now()), update_freq=1000,
+                                        histogram_freq=0, write_grads=True, write_graph=False, write_images=False)
     es_callback = callbacks.EarlyStopping(monitor='val_loss', verbose=1)
 
-    deep_model = models.Sequential()
-    deep_model.add(layers.Conv1D(5, 3, input_shape=(None, INPUT_DIM)))
-    deep_model.add(layers.MaxPooling1D(3))
-    deep_model.add(layers.Activation('selu'))
-    deep_model.add(layers.Bidirectional(layers.GRU(128), merge_mode='sum'))
-    deep_model.add(layers.BatchNormalization())
-    deep_model.add(layers.Activation('selu'))
-    deep_model.add(layers.Dropout(0.5))
-    deep_model.add(layers.Dense(OUTPUT_DIM))
-    deep_model.add(layers.Activation('softmax'))
-    deep_model.compile(optimizer='adam', loss='categorical_crossentropy',
+    # Line model
+    line_model = models.Sequential()
+    line_model.add(layers.Conv1D(5, 3, input_shape=(None, INPUT_DIM)))
+    line_model.add(layers.MaxPooling1D(3))
+    line_model.add(layers.Activation('selu'))
+    line_model.add(layers.Bidirectional(layers.GRU(128), merge_mode='sum'))
+    line_model.add(layers.BatchNormalization())
+    line_model.add(layers.Activation('selu'))
+    line_model.add(layers.Dropout(0.5))
+    line_model.add(layers.Dense(OUTPUT_DIM))
+    line_model.add(layers.Activation('softmax'))
+    line_model.compile(optimizer='adam', loss='categorical_crossentropy',
                        metrics=['categorical_accuracy', 'mean_squared_error'])
-    deep_model.summary()
+    line_model.summary()
 
-    deep_model.fit(lines_matrix, np.array(labels), validation_split=0.1, epochs=15, batch_size=BATCH_SIZE,
+    line_model.fit(lines_matrix, np.array(labels), validation_split=0.1, epochs=15, batch_size=BATCH_SIZE,
                    callbacks=[tb_callback, es_callback])
-    deep_model.save(output_model + '.hdf5')
+    line_model.save(output_model + '.hdf5')
 
 
 def predict(unlabeled_mails, input_model, output_json=None):
-    deep_model = models.load_model(input_model + '.hdf5')
+    line_model = models.load_model(input_model + '.hdf5')
 
     output_json_file = None
     if output_json:
@@ -140,7 +138,7 @@ def predict(unlabeled_mails, input_model, output_json=None):
         pad_rows(lines_matrix, [], CONTEXT)
 
         lines_matrix = contextualize(lines_matrix, CONTEXT)
-        predictions = deep_model.predict(lines_matrix)
+        predictions = line_model.predict(lines_matrix)
 
         mail_lines = (['<PAD>\n'] * CONTEXT) + mail_lines + (['<PAD>\n'] * CONTEXT)
         export_mail_annotation_spans(mail_lines, mail_dict, predictions, output_json_file)
@@ -149,23 +147,79 @@ def predict(unlabeled_mails, input_model, output_json=None):
         output_json_file.close()
 
 
-def post_process_mail(lines, labels_softmax):
-    for line, label in zip(lines, labels_softmax):
+def post_process_labels(lines, labels_softmax):
+    for i, (line, label) in enumerate(zip(lines, labels_softmax)):
+        # Skip padding
+        if i < CONTEXT:
+            continue
+        if i >= len(lines) - CONTEXT:
+            break
+
         label_argmax = np.argmax(label)
         label_argsort = np.argsort(label)
         label_text = label_map_inverse[label_argmax]
 
+        prev_l = [label_map_inverse[np.argmax(l)] for l in labels_softmax[i - CONTEXT:i]]
+        next_l = [label_map_inverse[np.argmax(l)] for l in labels_softmax[i + 1:i + 1 + CONTEXT]]
+
+        prev_set = set([l for l in prev_l if l not in ['<empty>', '<pad>']])
+        next_set = set([l for l in next_l if l not in ['<empty>', '<pad>']])
+
+        # Correct <empty>
+        if line.strip() == '':
+            label_text = '<empty>'
+
+        # Empty lines have to be empty
+        elif (label_text == '<empty>' and line.strip() != '') or label_text == '<pad>':
+            label_text = prev_l[-1] if prev_l[-1] != '<empty>' else 'paragraph'
+
+        # Bleeding quotations
+        elif label_text == 'quotation' and prev_l[-1] == 'quotation' \
+                and lines[i - 1].strip() and lines[i - 1].strip() \
+                and next_l[0] != 'quotation' and lines[i - 1].strip()[0] != line.strip()[0]:
+            label_text = prev_l[-1]
+
+        # Quotation markers
+        elif label_text == 'quotation' and prev_l[-1] in ['<empty>', '<pad>'] \
+                and label_map_int['quotation_marker'] in label_argsort[:3]:
+            label_text = 'quotation_marker'
+
+        # Interrupted closings / signatures
+        elif label_text != prev_l[-1] and next_l[0] == prev_l[-1] \
+                and prev_l[-1] in ['closing', 'personal_signature', 'mua_signature']:
+            label_text = prev_l[-1]
+
+        # Personal signatures in MUA signatures
+        elif label_text == 'personal_signature' and prev_l[-1] == 'mua_signature' \
+                and (next_l[0] == 'mua_signature' or next_l[0] == '<pad>'):
+            label_text = 'mua_signature'
+
+        # MUA signatures in personal signatures
+        elif label_text == 'mua_signature' and prev_l[-1] == 'personal_signature' \
+                and (next_l[0] == 'personal_signature' or next_l[0] == '<pad>'):
+            label_text = 'personal_signature'
+
+        # Interrupted blocks
+        elif len(prev_set) == 1 and label_text != [*prev_set][0] and [*prev_set][0] in next_set \
+                and [*prev_set][0] in ['mua_signature', 'personal_signature', 'patch', 'code', 'tabular']:
+            label_text = [*prev_set][0]
+
+        # Stray technical
+        elif label_text == 'technical' and prev_l[-1] not in ['technical', '<empty>']:
+            label_text = prev_l[-1]
+
+        labels_softmax[i] = label_map[label_text]
         yield line, label_text
 
 
 def export_mail_annotation_spans(mail_lines, mail_dict, predictions_softmax, output_file=None):
-    start_offset = 0
-    prev_label = None
     text = ''
     annotations = []
-    last_label = '<pad>'
+    prev_label = None
+    cur_label = '<pad>'
+    start_offset = 0
 
-    for i, _ in enumerate(mail_lines):
+    for i, (line, label_text) in enumerate(post_process_labels(mail_lines, predictions_softmax)):
         cur_label = label_map_inverse[np.argmax(predictions_softmax[i])]
         if prev_label is None:
             prev_label = cur_label
@@ -179,25 +233,22 @@ def export_mail_annotation_spans(mail_lines, mail_dict, predictions_softmax, out
             start_offset = cur_offset + 1
             prev_label = cur_label
 
-    for line, label in post_process_mail(mail_lines, predictions_softmax):
-        print('{:>20}    --->    {}'.format(label, line), end='')
-        last_label = label
+        print('{:>20}    --->    {}'.format(label_text, line), end='')
+
     print()
 
     if not output_file:
         return
 
-    if last_label not in ['<empty>', '<pad>']:
-        annotations.append((start_offset, len(text) - 1, last_label))
+    if cur_label not in ['<empty>', '<pad>']:
+        annotations.append((start_offset, len(text) - 1, cur_label))
 
     d = mail_dict.copy()
 
     if 'id' in d:
         del d['id']
-    if 'annotations' in d:
-        del d['annotations']
 
-    d.update({'labels': annotations})
+    d.update({'labels': annotations, 'annotations': annotations})
     json.dump(d, output_file)
     output_file.write('\n')
 
@@ -215,9 +266,7 @@ def contextualize(lines, context=CONTEXT):
 
         prev_vec = lines_copy[i - context:i]
         next_vec = lines_copy[i + 1:i + 1 + context]
-        #context_vec = np.concatenate(np.concatenate(list(zip(next_vec, prev_vec))))
 
-        #c_lines.append(np.concatenate((context_vec, line)))
         c_lines.append(np.concatenate(prev_vec + [line] + next_vec))
 
     return np.array(c_lines)
@@ -237,17 +286,11 @@ def label_lines(doc):
     lines = [l + '\n' for l in doc['text'].split('\n')]
     annotations = sorted(doc['annotations'], key=lambda a: a['start_offset'], reverse=True)
     offset = 0
-    prev_label = '<pad>'
     for l in lines:
         end_offset = offset + len(l)
 
         if annotations and offset > annotations[-1]['end_offset']:
             annotations.pop()
-
-        # skip annotations which span less than half the line
-        #if annotations and annotations[-1]['start_offset'] >= offset and \
-        #        annotations[-1]['end_offset'] - annotations[-1]['start_offset'] < (end_offset - offset) / 2:
-        #    annotations.pop()
 
         if not annotations or not l.strip():
             yield l, label_map['<empty>']
@@ -255,8 +298,7 @@ def label_lines(doc):
             continue
 
         if offset < annotations[-1]['end_offset'] and end_offset > annotations[-1]['start_offset']:
-            prev_label = annotations[-1]['label']
-            yield l,  label_map[prev_label]
+            yield l,  label_map[annotations[-1]['label']]
         else:
             yield l, label_map['<empty>']
 
