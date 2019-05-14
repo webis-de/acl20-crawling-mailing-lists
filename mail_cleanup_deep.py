@@ -220,12 +220,12 @@ def export_mail_annotation_spans(mail_lines, mail_dict, predictions_softmax, out
     start_offset = 0
 
     for i, (line, label_text) in enumerate(post_process_labels(mail_lines, predictions_softmax)):
-        cur_label = label_map_inverse[np.argmax(predictions_softmax[i])]
+        cur_label = label_text
         if prev_label is None:
             prev_label = cur_label
 
         cur_offset = len(text) - 1
-        text = text + mail_lines[i]
+        text += line
         if cur_label != prev_label:
             if output_file and prev_label not in ['<pad>', '<empty>']:
                 annotations.append((start_offset, cur_offset, prev_label))
