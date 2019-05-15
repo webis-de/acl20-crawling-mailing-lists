@@ -2,8 +2,9 @@
 
 from datetime import datetime
 import fastText
+from itertools import chain
 from keras import callbacks, layers, models
-import math
+from keras.utils import Sequence
 import numpy as np
 import json
 import plac
@@ -45,109 +46,188 @@ INPUT_DIM = 100
 OUTPUT_DIM = len(label_map)
 BATCH_SIZE = 128
 MAX_LEN = 15
-CONTEXT = 3
+CONTEXT = 4
 
 
 @plac.annotations(
     cmd=('Command', 'positional', None, str, None, 'CMD'),
-    input_file=('Input JSONL file', 'positional', None, str, None, 'JSONL'),
     model=('Keras model', 'positional', None, str, None, 'K5'),
+    input_file=('Input JSONL file', 'positional', None, str, None, 'JSONL'),
     fasttext_model=('FastText Model', 'positional', None, str, None, 'FASTTEXT_BIN'),
-    output_json=('Output JSONL file', 'option', 'o', str, None, 'OUTPUT')
+    output_json=('Output JSONL file', 'option', 'o', str, None, 'OUTPUT'),
+    validation_input=('Validation Data JSON', 'option', 'v', str, None, 'JSONL')
 )
-def main(cmd, input_file, model, fasttext_model, output_json=None):
-    labeled_mails = []
-    unlabeled_mails = []
-    for line in open(input_file).readlines():
-        mail_json = json.loads(line)
-        if not mail_json['annotations']:
-            unlabeled_mails.append(([l + '\n' for l in mail_json['text'].split('\n')], mail_json))
-            continue
-
-        labeled_mails.append([l for l in label_lines(mail_json)])
-
-    print('Labeled emails:', len(labeled_mails))
-    print('Unlabeled emails:', len(unlabeled_mails))
-
+def main(cmd, model, input_file, fasttext_model, output_json=None, validation_input=None):
     print('Loading FastText model...')
     load_fasttext_model(fasttext_model)
 
     if cmd == 'train':
-        train_model(labeled_mails, model)
+        train_model(input_file, model, validation_input)
     elif cmd == 'predict':
-        predict(unlabeled_mails, model, output_json)
+        predict(model, input_file, output_json)
     else:
         print('Invalid command.', file=sys.stderr)
         exit(1)
 
 
-def train_model(labeled_mails, output_model):
-    lines_matrix = []
-    labels = []
-    for mail in labeled_mails:
-        pad_rows(lines_matrix, labels, CONTEXT)
+class MailLinesSequence(Sequence):
+    def __init__(self, input_file, labeled=True, batch_size=None, line_shape=(MAX_LEN, INPUT_DIM)):
+        self.labeled = labeled
+        self.mail_lines = []
+        self.mail_start_index_map = {}
+        self.mail_end_index_map = {}
 
-        for line, label in mail:
-            #print('{:>20}    train --->    {}'.format(label_map_inverse[np.argmax(label)], line), end='')
-            lines_matrix.append(pad_2d_sequence(get_word_vectors(line), MAX_LEN))
-            labels.append(label)
+        self.batch_size = batch_size
+        self.line_shape = line_shape
 
-        pad_rows(lines_matrix, labels, CONTEXT)
+        if self.labeled:
+            self.padding_line = [(None, label_map['<pad>'])]
+        else:
+            self.padding_line = [None]
 
-    lines_matrix = contextualize(lines_matrix, CONTEXT)
-    labels = np.array(labels)
+        self._load_json(input_file)
 
+    def _load_json(self, input_file):
+        context_padding = self.padding_line * CONTEXT
+
+        for input_line in open(input_file, 'r'):
+            mail_json = json.loads(input_line)
+
+            lines = None
+            if not self.labeled:
+                lines = [l + '\n' for l in mail_json['text'].split('\n')]
+
+            elif self.labeled and mail_json['annotations']:
+                lines = [l for l in label_lines(mail_json)]
+
+            if lines:
+                self.mail_start_index_map[len(self.mail_lines)] = mail_json
+                self.mail_end_index_map[len(self.mail_lines) + len(lines)] = mail_json
+                self.mail_lines.extend(context_padding + lines + context_padding)
+
+        if self.batch_size is None:
+            self.batch_size = len(self.mail_lines)
+
+    def __len__(self):
+        return int(np.ceil(len(self.mail_lines) / self.batch_size))
+
+    def __getitem__(self, index):
+        index = index * self.batch_size
+
+        batch = np.empty((self.batch_size,) + self.line_shape)
+        batch_context = np.empty((self.batch_size, CONTEXT * 2 + 1) + self.line_shape)
+        batch_labels = np.empty((self.batch_size, OUTPUT_DIM))
+
+        end_index = index + self.batch_size if self.batch_size is not None else len(self.mail_lines)
+
+        padding_lines = self.padding_line * CONTEXT
+        mail_slice = padding_lines + self.mail_lines[index:end_index] + padding_lines
+
+        for i, line in enumerate(mail_slice):
+            if i < CONTEXT or i >= len(mail_slice) - CONTEXT:
+                continue
+
+            if self.labeled:
+                batch_labels[i - CONTEXT] = line[1]
+                # line_text = line[0] if line[0] is not None else '<PAD>\n'
+                # print('{:>20}    --->    {}'.format(label_map_inverse[np.argmax(line[1])], line_text), end='')
+
+            line_vecs = []
+            for c in chain(mail_slice[i - CONTEXT:i], [line], mail_slice[i + 1:i + 1 + CONTEXT]):
+                if self.labeled:
+                    c, _ = c    # type: tuple
+
+                # Check if this is a padding line
+                if c is None:
+                    line_vecs.append(np.ones(self.line_shape) * -1)
+                else:
+                    line_vecs.append(pad_2d_sequence(get_word_vectors(c), self.line_shape[0]))
+
+            batch[i - CONTEXT] = line_vecs[CONTEXT]
+            batch_context[i - CONTEXT] = np.stack(line_vecs)
+
+        if self.labeled:
+            return [batch, batch_context], batch_labels
+
+        return [batch, batch_context]
+
+
+def pad_2d_sequence(seq, max_len):
+    return np.pad(seq[:max_len], ((0, max(0, max_len - seq.shape[0])), (0, 0)), 'constant')
+
+
+def train_model(input_file, output_model, validation_input=None):
     tb_callback = callbacks.TensorBoard(log_dir='./data/graph/' + str(datetime.now()), update_freq=1000,
                                         histogram_freq=0, write_grads=True, write_graph=False, write_images=False)
-    es_callback = callbacks.EarlyStopping(monitor='val_loss', verbose=1)
+    es_callback = callbacks.EarlyStopping(monitor='val_loss', verbose=1, patience=5)
+    cp_callback = callbacks.ModelCheckpoint(output_model + '.hdf5', save_best_only=True)
 
     # Line model
-    line_model = models.Sequential()
-    line_model.add(layers.Conv1D(5, 3, input_shape=(None, INPUT_DIM)))
-    line_model.add(layers.MaxPooling1D(3))
-    line_model.add(layers.Activation('selu'))
-    line_model.add(layers.Bidirectional(layers.GRU(128), merge_mode='sum'))
-    line_model.add(layers.BatchNormalization())
-    line_model.add(layers.Activation('selu'))
-    line_model.add(layers.Dropout(0.5))
-    line_model.add(layers.Dense(OUTPUT_DIM))
-    line_model.add(layers.Activation('softmax'))
+    line_input = layers.Input(shape=(MAX_LEN, INPUT_DIM))
+    masking = layers.Masking(0)(line_input)
+    bi_lstm = layers.Bidirectional(layers.GRU(128), merge_mode='sum')(masking)
+    bi_lstm = layers.BatchNormalization()(bi_lstm)
+    bi_lstm = layers.Activation('selu')(bi_lstm)
+    
+    context_input = layers.Input(shape=(CONTEXT * 2 + 1, MAX_LEN, INPUT_DIM))
+    conv2d = layers.Conv2D(5, (3, 3))(context_input)
+    conv2d = layers.MaxPooling2D(3)(conv2d)
+    conv2d = layers.Activation('selu')(conv2d)
+    dropout_1 = layers.Dropout(0.25)(conv2d)
+    flatten = layers.Flatten()(dropout_1)
+    dense_1 = layers.Dense(128)(flatten)
+
+    concat = layers.concatenate([bi_lstm, dense_1])
+
+    dropout_2 = layers.Dropout(0.5)(concat)
+    dense_2 = layers.Dense(OUTPUT_DIM)(dropout_2)
+    dense_2 = layers.Activation('softmax')(dense_2)
+
+    line_model = models.Model(inputs=[line_input, context_input], outputs=dense_2)
+
+    # line_model = models.Sequential()
+    # line_model.add(layers.Conv1D(5, 3, input_shape=(None, INPUT_DIM)))
+    # line_model.add(layers.MaxPooling1D(3))
+    # line_model.add(layers.Activation('selu'))
+    # line_model.add(layers.Bidirectional(layers.GRU(128), merge_mode='sum'))
+    # line_model.add(layers.BatchNormalization())
+    # line_model.add(layers.Activation('selu'))
+    # line_model.add(layers.Dropout(0.5))
+    # line_model.add(layers.Dense(OUTPUT_DIM))
+    # line_model.add(layers.Activation('softmax'))
+    
     line_model.compile(optimizer='adam', loss='categorical_crossentropy',
                        metrics=['categorical_accuracy', 'mean_squared_error'])
     line_model.summary()
 
-    line_model.fit(lines_matrix, np.array(labels), validation_split=0.1, epochs=15, batch_size=BATCH_SIZE,
-                   callbacks=[tb_callback, es_callback])
-    line_model.save(output_model + '.hdf5')
+    train_seq = MailLinesSequence(input_file, labeled=True, batch_size=BATCH_SIZE)
+    val_seq = MailLinesSequence(validation_input, labeled=True) if validation_input else None
+
+    line_model.fit_generator(train_seq, epochs=15, validation_data=val_seq, shuffle=True,
+                             max_queue_size=100, callbacks=[tb_callback, es_callback, cp_callback])
 
 
-def predict(unlabeled_mails, input_model, output_json=None):
+def predict(input_model, input_file, output_json=None):
     line_model = models.load_model(input_model + '.hdf5')
 
     output_json_file = None
     if output_json:
         output_json_file = open(output_json, 'w')
 
-    for mail_lines, mail_dict in unlabeled_mails:
-        if len(mail_lines) > 10000:
-            continue
+    train_seq = MailLinesSequence(input_file, labeled=False, batch_size=100)
 
-        lines_matrix = []
-        pad_rows(lines_matrix, [], CONTEXT)
-        lines_matrix.extend([pad_2d_sequence(get_word_vectors(l), MAX_LEN) for l in mail_lines])
-        pad_rows(lines_matrix, [], CONTEXT)
-
-        lines_matrix = contextualize(lines_matrix, CONTEXT)
-        predictions = line_model.predict(lines_matrix)
-
-        mail_lines = (['<PAD>\n'] * CONTEXT) + mail_lines + (['<PAD>\n'] * CONTEXT)
-        export_mail_annotation_spans(mail_lines, mail_dict, predictions, output_json_file)
+    predictions = line_model.predict_generator(train_seq, steps=200)
+    export_mail_annotation_spans(predictions, train_seq, output_json_file)
 
     if output_json_file:
         output_json_file.close()
 
 
 def post_process_labels(lines, labels_softmax):
+    lines = ([None] * CONTEXT) + lines + ([None] * CONTEXT)
+    sm_pad = np.ones((CONTEXT, OUTPUT_DIM)) * -1
+    labels_softmax = np.concatenate((sm_pad, labels_softmax, sm_pad))
+
     for i, (line, label) in enumerate(zip(lines, labels_softmax)):
         # Skip padding
         if i < CONTEXT:
@@ -164,6 +244,11 @@ def post_process_labels(lines, labels_softmax):
 
         prev_set = set([l for l in prev_l if l not in ['<empty>', '<pad>']])
         next_set = set([l for l in next_l if l not in ['<empty>', '<pad>']])
+
+        if line is None:
+            yield '<PAD>\n', '<pad>'
+            labels_softmax[i] = label_map['<pad>']
+            continue
 
         # Correct <empty>
         if line.strip() == '':
@@ -212,14 +297,14 @@ def post_process_labels(lines, labels_softmax):
         yield line, label_text
 
 
-def export_mail_annotation_spans(mail_lines, mail_dict, predictions_softmax, output_file=None):
+def export_mail_annotation_spans(predictions_softmax, pred_sequence, output_file=None):
     text = ''
     annotations = []
     prev_label = None
     cur_label = '<pad>'
     start_offset = 0
 
-    for i, (line, label_text) in enumerate(post_process_labels(mail_lines, predictions_softmax)):
+    for i, (line, label_text) in enumerate(post_process_labels(pred_sequence.mail_lines, predictions_softmax)):
         cur_label = label_text
         if prev_label is None:
             prev_label = cur_label
@@ -237,20 +322,20 @@ def export_mail_annotation_spans(mail_lines, mail_dict, predictions_softmax, out
 
     print()
 
-    if not output_file:
-        return
-
-    if cur_label not in ['<empty>', '<pad>']:
-        annotations.append((start_offset, len(text) - 1, cur_label))
-
-    d = mail_dict.copy()
-
-    if 'id' in d:
-        del d['id']
-
-    d.update({'labels': annotations, 'annotations': annotations})
-    json.dump(d, output_file)
-    output_file.write('\n')
+    # if not output_file:
+    #     return
+    #
+    # if cur_label not in ['<empty>', '<pad>']:
+    #     annotations.append((start_offset, len(text) - 1, cur_label))
+    #
+    # d = mail_dict.copy()
+    #
+    # if 'id' in d:
+    #     del d['id']
+    #
+    # d.update({'labels': annotations, 'annotations': annotations})
+    # json.dump(d, output_file)
+    # output_file.write('\n')
 
 
 def contextualize(lines, context=CONTEXT):
@@ -276,10 +361,6 @@ def pad_rows(rows, labels, pad=1, shape=(MAX_LEN, INPUT_DIM)):
     for _ in range(pad):
         rows.append(np.ones(shape) * -1)
         labels.append(label_map['<pad>'])
-
-
-def pad_2d_sequence(seq, max_len):
-    return np.pad(seq[:max_len], ((0, max(0, max_len - seq.shape[0])), (0, 0)), 'constant')
 
 
 def label_lines(doc):
