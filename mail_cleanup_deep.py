@@ -10,6 +10,7 @@ import json
 import plac
 import re
 import sys
+import unicodedata
 
 
 label_map_int = {
@@ -393,10 +394,33 @@ def load_fasttext_model(model_path):
     _model = fastText.load_model(model_path)
 
 
+def normalize_fasttext_input(text):
+    # Normalize email addresses
+    text = re.sub(r'([a-zA-Z0-9_\-./+]+)@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.)|' +
+                  r'(([a-zA-Z0-9\-]+\.)+))([a-zA-Z]{2,}|[0-9]{1,3})(\]?)', ' @EMAIL@ ', text)
+
+    # Normalize URLs
+    text = re.sub(r'[a-zA-Z]{3,5}://[\w.-]+(?:\.[\w.-]+)+[\w\-._~:/?#[\]@!$&\'()*+,;=]+', ' @URL@ ', text)
+
+    # Normalize numbers
+    text = re.sub(r'\d', '0', text)
+    text = re.sub(r'0{5,}', '00000', text)
+
+    # Preserve indents
+    text = re.sub(r'(^|\n)[ \t]{4,}', r'\1@INDENT@ ', text)
+
+    # Split off special characters
+    text = re.sub(r'(^|[^<>|:.,;+_=~\-!#*(){}\[\]])([<>|:.,;+_=~\-!#*(){}\[\]]+)', r' \1 \2 ', text)
+
+    # Truncate runs of special characters
+    text = re.sub(r'([<>|:.,;+_=~\-!#*(){}\[\]]{5})[<>|:.,;+_=~\-!#*(){}\[\]]+', r'\1', text)
+
+    # Normalize Unicode
+    return unicodedata.normalize('NFKC', text)
+
+
 def get_word_vectors(text):
-    text = re.sub(r'([a-zA-Z0-9_\-\./+]+)@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.)|' +
-                  r'(([a-zA-Z0-9\-]+\.)+))([a-zA-Z]{2,4}|[0-9]{1,3})(\]?)', 'mail@address', text)
-    matrix = [_model.get_word_vector(w) for w in fastText.tokenize(text)]
+    matrix = [_model.get_word_vector(w) for w in fastText.tokenize(normalize_fasttext_input(text))]
     return np.array(matrix)
 
 

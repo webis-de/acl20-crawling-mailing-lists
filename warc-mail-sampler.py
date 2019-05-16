@@ -1,10 +1,11 @@
+from mail_cleanup_deep import normalize_fasttext_input
+
 import email
 import json
 import os
 import plac
 import psycopg2
 import psycopg2.extras
-import re
 from warcio import ArchiveIterator
 
 
@@ -24,9 +25,6 @@ def main(output_dir=None, output_jsonl=None, output_text=None, database='warcs',
         sampled_groups = {}
         num_samples = 0
 
-        mail_re = re.compile(r'([a-zA-Z0-9_\-\./+]+)@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.)|' +
-                             r'(([a-zA-Z0-9\-]+\.)+))([a-zA-Z]{2,4}|[0-9]{1,3})(\]?)')
-
         print('Retrieving samples...')
 
         cur.execute("""
@@ -37,8 +35,7 @@ def main(output_dir=None, output_jsonl=None, output_text=None, database='warcs',
                 AND n.name NOT LIKE '%%.commits%%'
                 AND n.name NOT LIKE '%%.cvs%%'
                 AND n.name NOT LIKE '%%.svn%%'
-            ORDER BY RANDOM()""",
-                    (total_mails, ))
+            ORDER BY RANDOM()""")
 
         if output_dir and not os.path.isdir(output_dir):
             os.makedirs(output_dir)
@@ -81,7 +78,7 @@ def main(output_dir=None, output_jsonl=None, output_text=None, database='warcs',
                     jsonl_file.write('\n')
 
                 if text_file:
-                    text_file.write(mail_re.sub('email@address', payload_str.lower()))
+                    text_file.write(normalize_fasttext_input(payload_str))
                     text_file.write('\n')
 
             if num_samples >= total_mails:
