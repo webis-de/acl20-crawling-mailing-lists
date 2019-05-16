@@ -5,7 +5,6 @@ import fastText
 from itertools import chain
 from keras import callbacks, layers, models
 from keras.utils import Sequence
-from keras_self_attention import SeqSelfAttention
 import numpy as np
 import json
 import plac
@@ -213,7 +212,7 @@ def predict(input_model, input_file, output_json=None):
 
     train_seq = MailLinesSequence(input_file, labeled=False, batch_size=100)
 
-    predictions = line_model.predict_generator(train_seq, steps=200)
+    predictions = line_model.predict_generator(train_seq, steps=200,  verbose=False)
     export_mail_annotation_spans(predictions, train_seq, output_json_file)
 
     if output_json_file:
@@ -233,7 +232,7 @@ def post_process_labels(lines, labels_softmax):
             break
 
         label_argmax = np.argmax(label)
-        label_argsort = np.argsort(label)
+        label_argsort = np.argsort(label)[::-1]
         label_text = label_map_inverse[label_argmax]
 
         prev_l = [label_map_inverse[np.argmax(l)] for l in labels_softmax[i - CONTEXT:i]]
@@ -253,12 +252,13 @@ def post_process_labels(lines, labels_softmax):
 
         # Empty lines have to be empty
         elif (label_text == '<empty>' and line.strip() != '') or label_text == '<pad>':
-            label_text = prev_l[-1] if prev_l[-1] != '<empty>' else 'paragraph'
+            label_text = prev_l[-1] if prev_l[-1] not in ['<empty>', '<pad>'] else 'paragraph'
 
         # Bleeding quotations
         elif label_text == 'quotation' and prev_l[-1] == 'quotation' \
                 and lines[i - 1].strip() and lines[i - 1].strip() \
-                and next_l[0] != 'quotation' and lines[i - 1].strip()[0] != line.strip()[0]:
+                and next_l[0] != 'quotation' and lines[i - 1].strip()[0] != line.strip()[0] \
+                and prev_l[-1] not in ['<empty>', '<pad>']:
             label_text = prev_l[-1]
 
         # Quotation markers
@@ -271,6 +271,12 @@ def post_process_labels(lines, labels_softmax):
                 and prev_l[-1] in ['closing', 'personal_signature', 'mua_signature']:
             label_text = prev_l[-1]
 
+        # Interrupted larger blocks
+        elif len(prev_set) == 1 and label_text != [*prev_set][0] and [*prev_set][0] in next_set \
+                and [*prev_set][0] in ['mua_signature', 'personal_signature', 'patch', 'code', 'tabular', 'technical'] \
+                and label_map_int[[*prev_set][0]] == label_argsort[1]:
+            label_text = [*prev_set][0]
+
         # Personal signatures in MUA signatures
         elif label_text == 'personal_signature' and prev_l[-1] == 'mua_signature' \
                 and (next_l[0] == 'mua_signature' or next_l[0] == '<pad>'):
@@ -281,13 +287,9 @@ def post_process_labels(lines, labels_softmax):
                 and (next_l[0] == 'personal_signature' or next_l[0] == '<pad>'):
             label_text = 'personal_signature'
 
-        # Interrupted blocks
-        elif len(prev_set) == 1 and label_text != [*prev_set][0] and [*prev_set][0] in next_set \
-                and [*prev_set][0] in ['mua_signature', 'personal_signature', 'patch', 'code', 'tabular']:
-            label_text = [*prev_set][0]
-
         # Stray technical
-        elif label_text == 'technical' and prev_l[-1] not in ['technical', '<empty>']:
+        elif label_text == 'technical' and prev_l[-1] not in ['technical', '<empty>', '<pad>'] \
+                and next_l[0] != 'technical':
             label_text = prev_l[-1]
 
         labels_softmax[i] = label_map[label_text]
