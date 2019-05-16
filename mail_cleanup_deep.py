@@ -210,7 +210,8 @@ def predict(input_model, input_file, output_json=None):
 
     to_stdout = output_json is None
     train_seq = MailLinesSequence(input_file, labeled=False, batch_size=256)
-    predictions = line_model.predict_generator(train_seq, verbose=(not to_stdout), steps=(None if not to_stdout else 3))
+    predictions = line_model.predict_generator(train_seq, verbose=(not to_stdout),
+                                               steps=(None if not to_stdout else 10))
     export_mail_annotation_spans(predictions, train_seq, output_json_file, verbose=to_stdout)
 
     if output_json_file:
@@ -233,8 +234,10 @@ def post_process_labels(lines, labels_softmax):
         label_argsort = np.argsort(label)[::-1]
         label_text = label_map_inverse[label_argmax]
 
-        prev_l = [label_map_inverse[np.argmax(l)] for l in labels_softmax[i - CONTEXT:i]]
-        next_l = [label_map_inverse[np.argmax(l)] for l in labels_softmax[i + 1:i + 1 + CONTEXT]]
+        context = min(3, CONTEXT)
+
+        prev_l = [label_map_inverse[np.argmax(l)] for l in labels_softmax[i - context:i]]
+        next_l = [label_map_inverse[np.argmax(l)] for l in labels_softmax[i + 1:i + 1 + context]]
 
         prev_set = set([l for l in prev_l if l not in ['<empty>', '<pad>']])
         next_set = set([l for l in next_l if l not in ['<empty>', '<pad>']])
@@ -259,35 +262,33 @@ def post_process_labels(lines, labels_softmax):
                 and prev_l[-1] not in ['<empty>', '<pad>']:
             label_text = prev_l[-1]
 
+        # Quotations
+        elif label_text not in ['quotation', 'quotation_marker', 'inline_header'] \
+                and (line.strip().startswith('>') or line.strip().startswith('|')) \
+                and (label_map_int['quotation'] in label_argsort[:3] or prev_l[-1] == 'quotation'):
+            label_text = 'quotation'
+
         # Quotation markers
         elif label_text == 'quotation' and prev_l[-1] in ['<empty>', '<pad>'] \
                 and label_map_int['quotation_marker'] in label_argsort[:3]:
             label_text = 'quotation_marker'
 
-        # Interrupted closings / signatures
+        # Interrupted short blocks
         elif label_text != prev_l[-1] and next_l[0] == prev_l[-1] \
-                and prev_l[-1] in ['closing', 'personal_signature', 'mua_signature']:
+                and prev_l[-1] in ['closing', 'personal_signature', 'mua_signature', 'inline-header', 'technical']:
             label_text = prev_l[-1]
 
-        # Interrupted larger blocks
+        # Interrupted long blocks
         elif len(prev_set) == 1 and label_text != [*prev_set][0] and [*prev_set][0] in next_set \
-                and [*prev_set][0] in ['mua_signature', 'personal_signature', 'patch', 'code', 'tabular', 'technical'] \
+                and [*prev_set][0] in ['mua_signature', 'personal_signature',
+                                       'patch', 'code', 'tabular', 'technical'] \
                 and label_map_int[[*prev_set][0]] == label_argsort[1]:
             label_text = [*prev_set][0]
 
-        # Personal signatures in MUA signatures
-        elif label_text == 'personal_signature' and prev_l[-1] == 'mua_signature' \
-                and (next_l[0] == 'mua_signature' or next_l[0] == '<pad>'):
-            label_text = 'mua_signature'
-
-        # MUA signatures in personal signatures
-        elif label_text == 'mua_signature' and prev_l[-1] == 'personal_signature' \
-                and (next_l[0] == 'personal_signature' or next_l[0] == '<pad>'):
-            label_text = 'personal_signature'
-
-        # Stray technical
-        elif label_text == 'technical' and prev_l[-1] not in ['technical', '<empty>', '<pad>'] \
-                and next_l[0] != 'technical':
+        # Interrupting stray classes
+        elif label_text in ['technical', 'mua_signature', 'personal_signature', 'patch', 'tabular'] \
+                and prev_l[-1] != label_text and prev_l[-1] not in ['<pad>', '<empty>'] \
+                and (next_l[0] == prev_l[-1] or (next_l[1] == prev_l[-1] and next_l[0] == '<empty>')):
             label_text = prev_l[-1]
 
         labels_softmax[i] = label_map[label_text]
