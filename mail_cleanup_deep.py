@@ -208,12 +208,10 @@ def predict(input_model, input_file, output_json=None):
     if output_json:
         output_json_file = open(output_json, 'w')
 
-    train_seq = MailLinesSequence(input_file, labeled=False, batch_size=100)
-
     verbose = output_json is not None
-
-    predictions = line_model.predict_generator(train_seq, steps=200,  verbose=verbose)
-    export_mail_annotation_spans(predictions, train_seq, output_json_file, verbose=verbose)
+    train_seq = MailLinesSequence(input_file, labeled=False, batch_size=256)
+    predictions = line_model.predict_generator(train_seq, verbose=verbose)
+    export_mail_annotation_spans(predictions, train_seq, output_json_file, verbose=not verbose)
 
     if output_json_file:
         output_json_file.close()
@@ -319,8 +317,8 @@ def export_mail_annotation_spans(predictions_softmax, pred_sequence, output_file
         # Skip padding
         if i < skip_lines:
             continue
-
         skip_lines = i
+
         cur_label = label_text
         if prev_label is None:
             prev_label = cur_label
@@ -336,7 +334,7 @@ def export_mail_annotation_spans(predictions_softmax, pred_sequence, output_file
 
         if output_file and i + 1 in pred_sequence.mail_end_index_map:
             if cur_label not in ['<pad>', '<empty>']:
-                annotations.append((start_offset, len(text), cur_label))
+                annotations.append((start_offset, len(text) - 1, cur_label))
             write_annotations(mail_dict, annotations)
             mail_dict = None
             annotations.clear()
@@ -352,7 +350,7 @@ def export_mail_annotation_spans(predictions_softmax, pred_sequence, output_file
             start_offset = cur_offset + 1
             prev_label = cur_label
 
-    if output_file:
+    if output_file and mail_dict:
         if cur_label not in ['<empty>', '<pad>']:
             annotations.append((start_offset, len(text) - 1, cur_label))
         write_annotations(mail_dict, annotations)
