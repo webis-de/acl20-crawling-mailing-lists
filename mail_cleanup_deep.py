@@ -105,8 +105,8 @@ class MailLinesSequence(Sequence):
                 continue
 
             if lines:
-                self.mail_start_index_map[len(self.mail_lines)] = mail_json
-                self.mail_end_index_map[len(self.mail_lines) + len(lines)] = mail_json
+                self.mail_start_index_map[len(self.mail_lines) + CONTEXT] = mail_json
+                self.mail_end_index_map[len(self.mail_lines) + CONTEXT + len(lines)] = mail_json
                 self.mail_lines.extend(context_padding + lines + context_padding)
 
         if self.batch_size is None:
@@ -166,7 +166,6 @@ def train_model(input_file, output_model, validation_input=None):
     es_callback = callbacks.EarlyStopping(monitor='val_loss', verbose=1, patience=5)
     cp_callback = callbacks.ModelCheckpoint(output_model + '.epoch-{epoch:02d}.loss-{val_loss:.2f}.hdf5')
 
-    # Line model
     line_input = layers.Input(shape=(MAX_LEN, INPUT_DIM))
     masking = layers.Masking(0)(line_input)
     bi_lstm = layers.Bidirectional(layers.GRU(128), merge_mode='sum')(masking)
@@ -181,14 +180,13 @@ def train_model(input_file, output_model, validation_input=None):
     conv2d = layers.Activation('relu')(conv2d)
     conv2d = layers.MaxPooling2D(2)(conv2d)
     flatten = layers.Flatten()(conv2d)
-    #dropout_1 = layers.Dropout(0.25)(dropout_1)
     dense_1 = layers.Dense(128)(flatten)
     dense_1 = layers.Activation('relu')(dense_1)
 
     concat = layers.concatenate([bi_lstm, dense_1])
 
-    dense_2 = layers.Dropout(0.5)(concat)
-    dense_2 = layers.Dense(OUTPUT_DIM)(dense_2)
+    dropout = layers.Dropout(0.5)(concat)
+    dense_2 = layers.Dense(OUTPUT_DIM)(dropout)
     softmax = layers.Activation('softmax')(dense_2)
 
     line_model = models.Model(inputs=[line_input, context_input], outputs=softmax)
@@ -212,8 +210,10 @@ def predict(input_model, input_file, output_json=None):
 
     train_seq = MailLinesSequence(input_file, labeled=False, batch_size=100)
 
-    predictions = line_model.predict_generator(train_seq, steps=200,  verbose=False)
-    export_mail_annotation_spans(predictions, train_seq, output_json_file)
+    verbose = output_json is not None
+
+    predictions = line_model.predict_generator(train_seq, steps=200,  verbose=verbose)
+    export_mail_annotation_spans(predictions, train_seq, output_json_file, verbose=verbose)
 
     if output_json_file:
         output_json_file.close()
@@ -296,70 +296,66 @@ def post_process_labels(lines, labels_softmax):
         yield line, label_text
 
 
-def export_mail_annotation_spans(predictions_softmax, pred_sequence, output_file=None):
+def export_mail_annotation_spans(predictions_softmax, pred_sequence, output_file=None, verbose=True):
     text = ''
     annotations = []
     prev_label = None
     cur_label = '<pad>'
     start_offset = 0
+    mail_dict = None
+    skip_lines = CONTEXT
+
+    def write_annotations(d, a):
+        d = d.copy()
+
+        if 'id' in d:
+            del d['id']
+
+        d.update({'labels': a, 'annotations': a})
+        json.dump(d, output_file)
+        output_file.write('\n')
 
     for i, (line, label_text) in enumerate(post_process_labels(pred_sequence.mail_lines, predictions_softmax)):
+        # Skip padding
+        if i < skip_lines:
+            continue
+
+        skip_lines = i
         cur_label = label_text
         if prev_label is None:
             prev_label = cur_label
 
+        if i in pred_sequence.mail_start_index_map:
+            mail_dict = pred_sequence.mail_start_index_map[i]
+
         cur_offset = len(text) - 1
         text += line
-        if cur_label != prev_label:
+
+        if verbose:
+            print('{:>20}    --->    {}'.format(label_text, line), end='')
+
+        if output_file and i + 1 in pred_sequence.mail_end_index_map:
+            if cur_label not in ['<pad>', '<empty>']:
+                annotations.append((start_offset, len(text), cur_label))
+            write_annotations(mail_dict, annotations)
+            mail_dict = None
+            annotations.clear()
+            start_offset = 0
+            prev_label = None
+            text = ''
+            skip_lines += CONTEXT * 2 + 1
+
+        elif cur_label != prev_label:
             if output_file and prev_label not in ['<pad>', '<empty>']:
                 annotations.append((start_offset, cur_offset, prev_label))
 
             start_offset = cur_offset + 1
             prev_label = cur_label
 
-        print('{:>20}    --->    {}'.format(label_text, line), end='')
-
-    print()
-
-    # if not output_file:
-    #     return
-    #
-    # if cur_label not in ['<empty>', '<pad>']:
-    #     annotations.append((start_offset, len(text) - 1, cur_label))
-    #
-    # d = mail_dict.copy()
-    #
-    # if 'id' in d:
-    #     del d['id']
-    #
-    # d.update({'labels': annotations, 'annotations': annotations})
-    # json.dump(d, output_file)
-    # output_file.write('\n')
-
-
-def contextualize(lines, context=CONTEXT):
-    lines_copy = []
-    pad_rows(lines_copy, [], context)
-    lines_copy.extend(lines)
-    pad_rows(lines_copy, [], context)
-
-    c_lines = []
-    for i, line in enumerate(lines_copy):
-        if i < context or i >= len(lines_copy) - context:
-            continue
-
-        prev_vec = lines_copy[i - context:i]
-        next_vec = lines_copy[i + 1:i + 1 + context]
-
-        c_lines.append(np.concatenate(prev_vec + [line] + next_vec))
-
-    return np.array(c_lines)
-
-
-def pad_rows(rows, labels, pad=1, shape=(MAX_LEN, INPUT_DIM)):
-    for _ in range(pad):
-        rows.append(np.ones(shape) * -1)
-        labels.append(label_map['<pad>'])
+    if output_file:
+        if cur_label not in ['<empty>', '<pad>']:
+            annotations.append((start_offset, len(text) - 1, cur_label))
+        write_annotations(mail_dict, annotations)
 
 
 def label_lines(doc):
