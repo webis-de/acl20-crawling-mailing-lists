@@ -5,6 +5,7 @@ import fastText
 from itertools import chain
 from keras import callbacks, layers, models
 from keras.utils import Sequence
+from keras_self_attention import SeqSelfAttention
 import numpy as np
 import json
 import plac
@@ -100,6 +101,10 @@ class MailLinesSequence(Sequence):
             elif self.labeled and mail_json['annotations']:
                 lines = [l for l in label_lines(mail_json)]
 
+            # Skip overly long mails (probably just excessive log data)
+            if len(lines) > 5000:
+                continue
+
             if lines:
                 self.mail_start_index_map[len(self.mail_lines)] = mail_json
                 self.mail_end_index_map[len(self.mail_lines) + len(lines)] = mail_json
@@ -160,42 +165,34 @@ def train_model(input_file, output_model, validation_input=None):
     tb_callback = callbacks.TensorBoard(log_dir='./data/graph/' + str(datetime.now()), update_freq=1000,
                                         histogram_freq=0, write_grads=True, write_graph=False, write_images=False)
     es_callback = callbacks.EarlyStopping(monitor='val_loss', verbose=1, patience=5)
-    cp_callback = callbacks.ModelCheckpoint(output_model + '.hdf5', save_best_only=True)
+    cp_callback = callbacks.ModelCheckpoint(output_model + '.epoch-{epoch:02d}.loss-{val_loss:.2f}.hdf5')
 
     # Line model
     line_input = layers.Input(shape=(MAX_LEN, INPUT_DIM))
     masking = layers.Masking(0)(line_input)
     bi_lstm = layers.Bidirectional(layers.GRU(128), merge_mode='sum')(masking)
     bi_lstm = layers.BatchNormalization()(bi_lstm)
-    bi_lstm = layers.Activation('selu')(bi_lstm)
+    bi_lstm = layers.Activation('relu')(bi_lstm)
     
     context_input = layers.Input(shape=(CONTEXT * 2 + 1, MAX_LEN, INPUT_DIM))
     conv2d = layers.Conv2D(5, (3, 3))(context_input)
-    conv2d = layers.MaxPooling2D(3)(conv2d)
-    conv2d = layers.Activation('selu')(conv2d)
-    dropout_1 = layers.Dropout(0.25)(conv2d)
-    flatten = layers.Flatten()(dropout_1)
+    conv2d = layers.BatchNormalization()(conv2d)
+    conv2d = layers.Activation('relu')(conv2d)
+    conv2d = layers.Conv2D(5, (3, 3))(conv2d)
+    conv2d = layers.Activation('relu')(conv2d)
+    conv2d = layers.MaxPooling2D(2)(conv2d)
+    flatten = layers.Flatten()(conv2d)
+    #dropout_1 = layers.Dropout(0.25)(dropout_1)
     dense_1 = layers.Dense(128)(flatten)
+    dense_1 = layers.Activation('relu')(dense_1)
 
     concat = layers.concatenate([bi_lstm, dense_1])
 
-    dropout_2 = layers.Dropout(0.5)(concat)
-    dense_2 = layers.Dense(OUTPUT_DIM)(dropout_2)
-    dense_2 = layers.Activation('softmax')(dense_2)
+    dense_2 = layers.Dropout(0.5)(concat)
+    dense_2 = layers.Dense(OUTPUT_DIM)(dense_2)
+    softmax = layers.Activation('softmax')(dense_2)
 
-    line_model = models.Model(inputs=[line_input, context_input], outputs=dense_2)
-
-    # line_model = models.Sequential()
-    # line_model.add(layers.Conv1D(5, 3, input_shape=(None, INPUT_DIM)))
-    # line_model.add(layers.MaxPooling1D(3))
-    # line_model.add(layers.Activation('selu'))
-    # line_model.add(layers.Bidirectional(layers.GRU(128), merge_mode='sum'))
-    # line_model.add(layers.BatchNormalization())
-    # line_model.add(layers.Activation('selu'))
-    # line_model.add(layers.Dropout(0.5))
-    # line_model.add(layers.Dense(OUTPUT_DIM))
-    # line_model.add(layers.Activation('softmax'))
-    
+    line_model = models.Model(inputs=[line_input, context_input], outputs=softmax)
     line_model.compile(optimizer='adam', loss='categorical_crossentropy',
                        metrics=['categorical_accuracy', 'mean_squared_error'])
     line_model.summary()
@@ -398,8 +395,7 @@ def get_word_vectors(text):
     text = re.sub(r'([a-zA-Z0-9_\-\./+]+)@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.)|' +
                   r'(([a-zA-Z0-9\-]+\.)+))([a-zA-Z]{2,4}|[0-9]{1,3})(\]?)', 'mail@address', text)
     matrix = [_model.get_word_vector(w) for w in fastText.tokenize(text)]
-    start_line = np.ones(INPUT_DIM)
-    return np.array([start_line] + matrix)
+    return np.array(matrix)
 
 
 def get_word_vector(word):
