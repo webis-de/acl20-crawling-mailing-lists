@@ -395,6 +395,9 @@ def load_fasttext_model(model_path):
 
 
 def normalize_fasttext_input(text):
+    if not text.strip():
+        return text
+
     # Normalize email addresses
     text = re.sub(r'([a-zA-Z0-9_\-./+]+)@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.)|' +
                   r'(([a-zA-Z0-9\-]+\.)+))([a-zA-Z]{2,}|[0-9]{1,3})(\]?)', ' @EMAIL@ ', text)
@@ -410,7 +413,7 @@ def normalize_fasttext_input(text):
     text = re.sub(r'(^|\n)[ \t]{4,}', r'\1@INDENT@ ', text)
 
     # Split off special characters
-    text = re.sub(r'(^|[^<>|:.,;+_=~\-!#*(){}\[\]])([<>|:.,;+_=~\-!#*(){}\[\]]+)', r' \1 \2 ', text)
+    text = re.sub(r'(^|[^<>|:.,;+_=~\-!#*(){}\[\]])([<>|:.,;+_=~\-!#*(){}\[\]]+)', r'\1 \2 ', text)
 
     # Truncate runs of special characters
     text = re.sub(r'([<>|:.,;+_=~\-!#*(){}\[\]]{5})[<>|:.,;+_=~\-!#*(){}\[\]]+', r'\1', text)
