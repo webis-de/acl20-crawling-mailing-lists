@@ -208,10 +208,10 @@ def predict(input_model, input_file, output_json=None):
     if output_json:
         output_json_file = open(output_json, 'w')
 
-    verbose = output_json is not None
+    to_stdout = output_json is None
     train_seq = MailLinesSequence(input_file, labeled=False, batch_size=256)
-    predictions = line_model.predict_generator(train_seq, verbose=verbose)
-    export_mail_annotation_spans(predictions, train_seq, output_json_file, verbose=not verbose)
+    predictions = line_model.predict_generator(train_seq, verbose=(not to_stdout), steps=(None if not to_stdout else 3))
+    export_mail_annotation_spans(predictions, train_seq, output_json_file, verbose=to_stdout)
 
     if output_json_file:
         output_json_file.close()
@@ -324,24 +324,29 @@ def export_mail_annotation_spans(predictions_softmax, pred_sequence, output_file
             prev_label = cur_label
 
         if i in pred_sequence.mail_start_index_map:
+            if verbose:
+                print(' {0:>>20}    --->    <<< MAIL START >>>'.format(''))
             mail_dict = pred_sequence.mail_start_index_map[i]
 
         cur_offset = len(text) - 1
         text += line
 
         if verbose:
-            print('{:>20}    --->    {}'.format(label_text, line), end='')
+            print(' {:>20}    --->    {}'.format(label_text, line), end='')
 
-        if output_file and i + 1 in pred_sequence.mail_end_index_map:
-            if cur_label not in ['<pad>', '<empty>']:
-                annotations.append((start_offset, len(text) - 1, cur_label))
-            write_annotations(mail_dict, annotations)
-            mail_dict = None
-            annotations.clear()
-            start_offset = 0
-            prev_label = None
-            text = ''
+        if i + 1 in pred_sequence.mail_end_index_map:
             skip_lines += CONTEXT * 2 + 1
+
+            if output_file:
+                if cur_label not in ['<pad>', '<empty>']:
+                    annotations.append((start_offset, len(text) - 1, cur_label))
+
+                write_annotations(mail_dict, annotations)
+                mail_dict = None
+                annotations.clear()
+                start_offset = 0
+                prev_label = None
+                text = ''
 
         elif cur_label != prev_label:
             if output_file and prev_label not in ['<pad>', '<empty>']:
