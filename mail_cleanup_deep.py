@@ -174,10 +174,10 @@ def train_model(input_file, output_model, validation_input=None):
     bi_lstm = layers.Activation('relu')(bi_lstm)
     
     context_input = layers.Input(shape=(CONTEXT * 2 + 1, MAX_LEN, INPUT_DIM))
-    conv2d = layers.Conv2D(5, (3, 3))(context_input)
+    conv2d = layers.Conv2D(64, (4, 4))(context_input)
     conv2d = layers.BatchNormalization()(conv2d)
     conv2d = layers.Activation('relu')(conv2d)
-    conv2d = layers.Conv2D(5, (3, 3))(conv2d)
+    conv2d = layers.Conv2D(32, (3, 3))(conv2d)
     conv2d = layers.Activation('relu')(conv2d)
     conv2d = layers.MaxPooling2D(2)(conv2d)
     flatten = layers.Flatten()(conv2d)
