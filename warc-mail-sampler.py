@@ -34,8 +34,14 @@ def main(output_dir=None, output_jsonl=None, output_text=None, database='warcs',
             WHERE n.name NOT LIKE 'gwene.%%'
                 AND n.name NOT LIKE '%%.patches%%'
                 AND n.name NOT LIKE '%%.commits%%'
+                AND n.name NOT LIKE '%%.dist-commits%%'
+                AND n.name NOT LIKE '%%.version-control%%'
+                AND n.name NOT LIKE '%%.git%%'
                 AND n.name NOT LIKE '%%.cvs%%'
                 AND n.name NOT LIKE '%%.svn%%'
+                AND n.name NOT LIKE '%%.trunk%%'
+                AND n.name NOT LIKE '%%.scm%%'
+                AND n.name NOT LIKE '%%.pkg%%'
             ORDER BY RANDOM()""")
 
         if output_dir and not os.path.isdir(output_dir):
