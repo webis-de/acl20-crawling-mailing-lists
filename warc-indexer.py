@@ -6,6 +6,7 @@ from multiprocessing import Queue
 import plac
 import os
 import psycopg2
+import re
 from time import sleep
 from tqdm import tqdm
 from threading import Thread
@@ -42,13 +43,18 @@ def start_indexer(input_dir, database, workers):
         cur.execute("""
         CREATE TABLE IF NOT EXISTS newsgroup (
             id SERIAL PRIMARY KEY NOT NULL,
-            name VARCHAR(255) UNIQUE NOT NULL)""")
+            name VARCHAR(256) UNIQUE NOT NULL)""")
         cur.execute("""
         CREATE TABLE IF NOT EXISTS message (
             id BIGSERIAL PRIMARY KEY NOT NULL,
-            message_id VARCHAR(255) UNIQUE NOT NULL,
+            message_id TEXT UNIQUE NOT NULL,
             newsgroup INTEGER REFERENCES newsgroup(id) NOT NULL,
-            news_url VARCHAR(255) NOT NULL,
+            news_url TEXT NOT NULL,
+            message_id_header TEXT NOT NULL,
+            from_header TEXT NOT NULL,
+            from_email TEXT NOT NULL,
+            to_header TEXT NOT NULL,
+            in_reply_to_header TEXT NOT NULL,
             message_date TIMESTAMP NOT NULL,
             filename TEXT NOT NULL,
             warc_offset INTEGER NOT NULL)""")
@@ -95,8 +101,13 @@ def signal_shutdown():
 
 
 def index_warc(conn, newsgroup_id, filename, queue):
+    global __SHUTDOWN_FLAG
+
     try:
         cur = conn.cursor()
+
+        email_regex = re.compile(r'([a-zA-Z0-9_\-./+]+)@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.)|' +
+                                 r'(([a-zA-Z0-9\-]+\.)+))([a-zA-Z]{2,}|[0-9]{1,3})(\]?)')
 
         with open(filename, 'rb') as f:
             iterator = ArchiveIterator(f)
@@ -104,13 +115,23 @@ def index_warc(conn, newsgroup_id, filename, queue):
                 headers = record.rec_headers
                 body = record.content_stream().read()
                 mail = mailparser.parse_from_bytes(body)
+
+                from_header = mail.headers.get('From', '')
+                from_email = re.search(email_regex, from_header)
+
                 cur.execute("""INSERT INTO message
-                    (newsgroup, message_id, news_url, message_date, filename, warc_offset)
-                    VALUES (%s, %s, %s, %s, %s, %s)""",
+                    (newsgroup, message_id, news_url, message_id_header, from_header, from_email, to_header,
+                    in_reply_to_header, message_date, filename, warc_offset)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                             (newsgroup_id,
                              headers.get_header('WARC-Record-ID'),
                              headers.get_header('WARC-News-URL'),
-                             str(mail.date),
+                             mail.headers.get('Message-ID', ''),
+                             from_header,
+                             from_email.group(0) if from_email is not None else '',
+                             mail.headers.get('To', ''),
+                             mail.headers.get('In-Reply-To', ''),
+                             str(mail.date) if mail.date is not None else '0000-00-00 00:00:00',
                              os.path.realpath(filename),
                              iterator.offset))
                 if i > 0 and i % 2000 == 0:
@@ -118,6 +139,9 @@ def index_warc(conn, newsgroup_id, filename, queue):
 
                 if __SHUTDOWN_FLAG:
                     return
+    except psycopg2.DatabaseError as e:
+        print(e)
+        return
     finally:
         conn.commit()
         queue.get()
