@@ -69,8 +69,6 @@ def main(cmd, model, input_file, fasttext_model, output_json=None, validation_in
     else:
         print('Invalid command.', file=sys.stderr)
         exit(1)
-
-
 class MailLinesSequence(Sequence):
     def __init__(self, input_file, labeled=True, batch_size=None, line_shape=(MAX_LEN, INPUT_DIM)):
         self.labeled = labeled
@@ -169,10 +167,10 @@ def train_model(input_file, output_model, validation_input=None):
 
     line_input = layers.Input(shape=(MAX_LEN, INPUT_DIM))
     masking = layers.Masking(0)(line_input)
-    bi_lstm = layers.Bidirectional(layers.GRU(128), merge_mode='sum')(masking)
-    bi_lstm = layers.BatchNormalization()(bi_lstm)
-    bi_lstm = layers.Activation('relu')(bi_lstm)
-    
+    bi_gru = layers.Bidirectional(layers.GRU(128), merge_mode='sum')(masking)
+    bi_gru = layers.BatchNormalization()(bi_gru)
+    bi_gru = layers.Activation('relu')(bi_gru)
+
     context_input = layers.Input(shape=(CONTEXT * 2 + 1, MAX_LEN, INPUT_DIM))
     conv2d = layers.Conv2D(64, (4, 4))(context_input)
     conv2d = layers.BatchNormalization()(conv2d)
@@ -184,7 +182,7 @@ def train_model(input_file, output_model, validation_input=None):
     dense_1 = layers.Dense(128)(flatten)
     dense_1 = layers.Activation('relu')(dense_1)
 
-    concat = layers.concatenate([bi_lstm, dense_1])
+    concat = layers.concatenate([bi_gru, dense_1])
 
     dropout = layers.Dropout(0.5)(concat)
     dense_2 = layers.Dense(OUTPUT_DIM)(dropout)
@@ -409,11 +407,14 @@ def normalize_fasttext_input(text):
     text = re.sub(r'\d', '0', text)
     text = re.sub(r'0{5,}', '00000', text)
 
+    # Normalize hash values
+    text = re.sub(r'[0a-fA-F]{32,}', '@HASH@', text)
+
     # Preserve indents
     text = re.sub(r'(^|\n)[ \t]{4,}', r'\1@INDENT@ ', text)
 
     # Split off special characters
-    text = re.sub(r'(^|[^<>|:.,;+_=~\-!#*(){}\[\]])([<>|:.,;+_=~\-!#*(){}\[\]]+)', r'\1 \2 ', text)
+    text = re.sub(r'(^|[^<>|:.,;+=~!#*(){}\[\]])([<>|:.,;+=~!#*(){}\[\]]+)', r'\1 \2 ', text)
 
     # Truncate runs of special characters
     text = re.sub(r'([<>|:.,;+_=~\-!#*(){}\[\]]{5})[<>|:.,;+_=~\-!#*(){}\[\]]+', r'\1', text)

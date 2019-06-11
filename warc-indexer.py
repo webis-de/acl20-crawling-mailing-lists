@@ -59,6 +59,7 @@ def start_indexer(input_dir, database, workers):
 
         with tqdm(desc='Indexing group names', total=len(newsgroups), unit=' groups') as progress_bar:
             for i, group in enumerate(newsgroups):
+                group = group.encode('utf-8', 'surrogateescape').decode('utf-8', 'ignore')
                 cur.execute("""
                 INSERT INTO newsgroup (name) VALUES (%s)
                     ON CONFLICT ON CONSTRAINT newsgroup_name_key DO UPDATE SET
@@ -105,14 +106,7 @@ def index_warc(conn, newsgroup_id, filename, queue):
                 mail = mailparser.parse_from_bytes(body)
                 cur.execute("""INSERT INTO message
                     (newsgroup, message_id, news_url, message_date, filename, warc_offset)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    ON CONFLICT ON CONSTRAINT message_id_key DO UPDATE SET
-                        newsgroup = excluded.newsgroup,
-                        message_id = excluded.message_id,
-                        news_url = excluded.news_url,
-                        message_date = excluded.message_date,
-                        filename = excluded.filename,
-                        warc_offset = excluded.warc_offset""",
+                    VALUES (%s, %s, %s, %s, %s, %s)""",
                             (newsgroup_id,
                              headers.get_header('WARC-Record-ID'),
                              headers.get_header('WARC-News-URL'),

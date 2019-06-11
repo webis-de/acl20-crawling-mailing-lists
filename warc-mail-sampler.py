@@ -6,6 +6,7 @@ import os
 import plac
 import psycopg2
 import psycopg2.extras
+import re
 from warcio import ArchiveIterator
 
 
@@ -65,7 +66,9 @@ def main(output_dir=None, output_jsonl=None, output_text=None, database='warcs',
                 payload = record.content_stream().read()
                 payload_str = '\n'.join(decode_message_part(p) for p in email.message_from_bytes(payload).walk()
                                         if p.get_content_type() == 'text/plain')
-                if not payload_str:
+
+                # skip empty or binary payload
+                if not payload_str or re.match(r'^\s*=\s*ybegin\s', payload_str):
                     continue
 
                 if output_dir:
