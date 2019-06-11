@@ -131,7 +131,7 @@ def index_warc(conn, newsgroup_id, filename, queue):
                              from_email.group(0) if from_email is not None else '',
                              mail.headers.get('To', ''),
                              mail.headers.get('In-Reply-To', ''),
-                             str(mail.date) if mail.date is not None else '0000-00-00 00:00:00',
+                             str(mail.date) if mail.date is not None else '1970-01-01 00:00:00',
                              os.path.realpath(filename),
                              iterator.offset))
                 if i > 0 and i % 2000 == 0:
