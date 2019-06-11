@@ -81,7 +81,7 @@ def start_indexer(input_dir, database, workers):
 
         queue = Queue(maxsize=workers)
         with ThreadPoolExecutor(max_workers=workers) as e:
-            with tqdm(desc='Indexing WARCs', total=len(newsgroups_dict), unit=' WARCs') as progress_bar:
+            with tqdm(desc='Indexing groups', total=len(newsgroups_dict), unit=' WARCs') as progress_bar:
                 for group in newsgroups_dict:
                     for filename in glob(os.path.join(input_dir, group, '*.warc.gz')):
                         if __SHUTDOWN_FLAG:
