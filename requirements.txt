@@ -1,4 +1,5 @@
 Cython
+elasticsearch
 mail-parser
 beautifulsoup4
 fasttextmirror
