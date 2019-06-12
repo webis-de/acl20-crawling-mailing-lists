@@ -112,36 +112,41 @@ def index_warc(conn, newsgroup_id, filename, queue):
         with open(filename, 'rb') as f:
             iterator = ArchiveIterator(f)
             for i, record in enumerate(iterator):
-                headers = record.rec_headers
-                body = record.content_stream().read()
-                mail = mailparser.parse_from_bytes(body)
+                try:
+                    headers = record.rec_headers
+                    body = record.content_stream().read()
+                    mail = mailparser.parse_from_bytes(body)
 
-                from_header = mail.headers.get('From', '')
-                from_email = re.search(email_regex, from_header)
+                    from_header = mail.headers.get('From', '')
+                    from_email = re.search(email_regex, from_header)
 
-                cur.execute("""INSERT INTO message
-                    (newsgroup, message_id, news_url, message_id_header, from_header, from_email, to_header,
-                    in_reply_to_header, message_date, filename, warc_offset)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                            (newsgroup_id,
-                             headers.get_header('WARC-Record-ID'),
-                             headers.get_header('WARC-News-URL'),
-                             mail.headers.get('Message-ID', ''),
-                             from_header,
-                             from_email.group(0) if from_email is not None else '',
-                             mail.headers.get('To', ''),
-                             mail.headers.get('In-Reply-To', ''),
-                             str(mail.date) if mail.date is not None else '1970-01-01 00:00:00',
-                             os.path.realpath(filename),
-                             iterator.offset))
-                if i > 0 and i % 2000 == 0:
-                    conn.commit()
+                    cur.execute("""INSERT INTO message
+                        (newsgroup, message_id, news_url, message_id_header, from_header, from_email, to_header,
+                        in_reply_to_header, message_date, filename, warc_offset)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                                (newsgroup_id,
+                                 headers.get_header('WARC-Record-ID'),
+                                 headers.get_header('WARC-News-URL'),
+                                 mail.headers.get('Message-ID', ''),
+                                 from_header,
+                                 from_email.group(0) if from_email is not None else '',
+                                 mail.headers.get('To', ''),
+                                 mail.headers.get('In-Reply-To', ''),
+                                 str(mail.date) if mail.date is not None else '1970-01-01 00:00:00',
+                                 os.path.realpath(filename),
+                                 iterator.offset))
+                    if i > 0 and i % 2000 == 0:
+                        conn.commit()
+
+                except psycopg2.DatabaseError as e:
+                    print(e)
+                    continue
+                except Exception as e:
+                    print(e)
+                    continue
 
                 if __SHUTDOWN_FLAG:
                     return
-    except psycopg2.DatabaseError as e:
-        print(e)
-        return
     finally:
         conn.commit()
         queue.get()
