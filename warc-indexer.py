@@ -54,7 +54,7 @@ def start_indexer(input_dir, index, workers):
                     '@timestamp': {'type': 'date', 'format': 'yyyy-MM-dd HH:mm:ss'},
                     'groupname': {'type': 'keyword'},
                     'warc_file': {'type': 'keyword'},
-                    'warc_offset': {'type': 'keyword'},
+                    'warc_offset': {'type': 'long'},
                     'warc_id': {'type': 'keyword'},
                     'news_url': {'type': 'keyword'}
                 }
