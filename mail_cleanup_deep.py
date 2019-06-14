@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+from util import *
+
 from datetime import datetime
 import fastText
 from itertools import chain
@@ -8,9 +10,7 @@ from keras.utils import Sequence
 import numpy as np
 import json
 import plac
-import re
 import sys
-import unicodedata
 
 
 label_map_int = {
@@ -69,6 +69,8 @@ def main(cmd, model, input_file, fasttext_model, output_json=None, validation_in
     else:
         print('Invalid command.', file=sys.stderr)
         exit(1)
+
+
 class MailLinesSequence(Sequence):
     def __init__(self, input_file, labeled=True, batch_size=None, line_shape=(MAX_LEN, INPUT_DIM)):
         self.labeled = labeled
@@ -392,39 +394,8 @@ def load_fasttext_model(model_path):
     _model = fastText.load_model(model_path)
 
 
-def normalize_fasttext_input(text):
-    if not text.strip():
-        return text
-
-    # Normalize email addresses
-    text = re.sub(r'([a-zA-Z0-9_\-./+]+)@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.)|' +
-                  r'(([a-zA-Z0-9\-]+\.)+))([a-zA-Z]{2,}|[0-9]{1,3})(\]?)', ' @EMAIL@ ', text)
-
-    # Normalize URLs
-    text = re.sub(r'[a-zA-Z]{3,5}://[\w.-]+(?:\.[\w.-]+)+[\w\-._~:/?#[\]@!$&\'()*+,;=]+', ' @URL@ ', text)
-
-    # Normalize numbers
-    text = re.sub(r'\d', '0', text)
-    text = re.sub(r'0{5,}', '00000', text)
-
-    # Normalize hash values
-    text = re.sub(r'[0a-fA-F]{32,}', '@HASH@', text)
-
-    # Preserve indents
-    text = re.sub(r'(^|\n)[ \t]{4,}', r'\1@INDENT@ ', text)
-
-    # Split off special characters
-    text = re.sub(r'(^|[^<>|:.,;+=~!#*(){}\[\]])([<>|:.,;+=~!#*(){}\[\]]+)', r'\1 \2 ', text)
-
-    # Truncate runs of special characters
-    text = re.sub(r'([<>|:.,;+_=~\-!#*(){}\[\]]{5})[<>|:.,;+_=~\-!#*(){}\[\]]+', r'\1', text)
-
-    # Normalize Unicode
-    return unicodedata.normalize('NFKC', text)
-
-
 def get_word_vectors(text):
-    matrix = [_model.get_word_vector(w) for w in fastText.tokenize(normalize_fasttext_input(text))]
+    matrix = [_model.get_word_vector(w) for w in fastText.tokenize(normalize_message_text(text))]
     return np.array(matrix)
 
 

@@ -1,112 +1,136 @@
-from mail_cleanup_deep import normalize_fasttext_input
+from util import *
 
+from elasticsearch import Elasticsearch
 import email
 import json
 import os
 import plac
-import psycopg2
-import psycopg2.extras
 import re
+from tqdm import tqdm
 from warcio import ArchiveIterator
 
 
+ES = None
+
+
 @plac.annotations(
+    index=('Input Elasticsearch index', 'positional', None, str, None, 'INDEX'),
+    corpus_dir=('Input corpus directory', 'positional', None, str, None, 'CORPUS'),
     output_dir=('Output directory for eml files', 'option', 'd', str, None, 'DIR'),
     output_jsonl=('Output JSONL file for import into Doccano', 'option', 'j', str, None, 'FILE'),
     output_text=('Output text file for learning FastText model', 'option', 't', str, None, 'FILE'),
-    database=('Input PostgreSQL database', 'option', 'i', str, None, 'DATABASE'),
     total_mails=('Total number of mails to sample', 'option', 'n', int, None, 'NUM'),
-    group_limit=('Group sample limit', 'option', 'l', int, None, 'NUM')
+    group_limit=('Group sample limit', 'option', 'l', int, None, 'NUM'),
+    skip=('Skip ahead n messages', 'option', 's', int, None, 'SKIP')
 )
-def main(output_dir=None, output_jsonl=None, output_text=None, database='warcs', total_mails=10000, group_limit=80):
-    with psycopg2.connect(database=database) as conn:
-        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor, name='warc_samples')
-        cur.itersize = 2000
+def main(index, corpus_dir, output_dir=None, output_jsonl=None, output_text=None,
+         total_mails=10000, group_limit=None, skip=None):
+    scroll_size = 2000
 
-        sampled_groups = {}
-        num_samples = 0
+    global ES
+    ES = Elasticsearch(['betaweb015'], sniff_on_start=True, sniff_on_connection_fail=True)
 
-        print('Retrieving samples...')
+    if output_dir and not os.path.isdir(output_dir):
+        os.makedirs(output_dir)
 
-        cur.execute("""
-            SELECT * FROM message
-            INNER JOIN newsgroup n ON message.newsgroup = n.id
-            WHERE n.name NOT LIKE 'gwene.%%'
-                AND n.name NOT LIKE '%%.patches%%'
-                AND n.name NOT LIKE '%%.commits%%'
-                AND n.name NOT LIKE '%%.dist-commits%%'
-                AND n.name NOT LIKE '%%.version-control%%'
-                AND n.name NOT LIKE '%%.git%%'
-                AND n.name NOT LIKE '%%.cvs%%'
-                AND n.name NOT LIKE '%%.svn%%'
-                AND n.name NOT LIKE '%%.trunk%%'
-                AND n.name NOT LIKE '%%.scm%%'
-                AND n.name NOT LIKE '%%.pkg%%'
-            ORDER BY RANDOM()""")
+    jsonl_file = None
+    if output_jsonl:
+        jsonl_file = open(output_jsonl, 'w')
 
-        if output_dir and not os.path.isdir(output_dir):
-            os.makedirs(output_dir)
+    text_file = None
+    if output_text:
+        text_file = open(output_text, 'w')
 
-        jsonl_file = None
-        if output_jsonl:
-            jsonl_file = open(output_jsonl, 'w')
+    print('Retrieving initial batch...')
+    results = ES.search(index=index, scroll='3m', size=scroll_size, body={
+        "query": {
+            "bool": {
+                "filter": {
+                    # Skip Gwene
+                    "wildcard": {"groupname": "gmane.*"}
+                },
+                "must_not": [{
+                    # SCM
+                    "query_string": {
+                        "query": "groupname:(*.patches OR *.commits* OR *.dist-commits* OR *.version-control* " +
+                                 "OR *.git* OR *.cvs* OR *.svn* OR *.trunk* OR *.scm* OR *.pkg*)",
+                        "analyze_wildcard": True
+                    }
+                }, {
+                    # Bugs
+                    "query_string": {
+                        "query": "groupname:(*.bugs* OR *.issues* OR *.bugzilla* OR *.codereview*)",
+                        "analyze_wildcard": True
+                    }
+                }, {
+                    # Comp, Linux
+                    "query_string": {
+                        "query": "groupname:(*.comp* OR *.linux*)",
+                        "analyze_wildcard": True
+                    }
+                }]
+            }
+        },
+        "sort": ["warc_id"],
+        "size": 30
+    })
 
-        text_file = None
-        if output_text:
-            text_file = open(output_text, 'w')
+    if skip:
+        print('Skipping ahead {} messages...'.format(skip))
 
-        for msg in cur:
-            prev_samples = sampled_groups.get(msg['name'], 0)
-            if prev_samples > group_limit:
-                continue
-            sampled_groups[msg['name']] = prev_samples + 1
-            num_samples += 1
+    sampled_groups = {}
+    num_samples = 0
+    num_skipped = 0
 
-            with open(msg['filename'], 'rb') as f:
-                f.seek(msg['warc_offset'])
-                record = next(ArchiveIterator(f))
-
-                msg_url = record.rec_headers.get_header('WARC-News-URL')
-                print('Sampled {}'.format(msg_url))
-
-                payload = record.content_stream().read()
-                payload_str = '\n'.join(decode_message_part(p) for p in email.message_from_bytes(payload).walk()
-                                        if p.get_content_type() == 'text/plain')
-
-                # skip empty or binary payload
-                if not payload_str or re.match(r'^\s*=\s*ybegin\s', payload_str):
+    with tqdm(desc='Sampling messages', total=total_mails, unit=' messages') as progress_bar:
+        while num_samples < total_mails and len(results['hits']['hits']) > 0:
+            for hit in results['hits']['hits']:
+                if skip and num_skipped < skip:
+                    num_skipped += 1
                     continue
 
-                if output_dir:
-                    output_file = os.path.join(output_dir, msg_url.replace('news:', '').replace('/', '') + '.eml')
-                    open(output_file, 'wb').write(payload + b'\n')
+                src = hit['_source']
+                prev_samples = sampled_groups.get(src['groupname'], 0)
+                if group_limit and prev_samples > group_limit:
+                    continue
+                sampled_groups[src['groupname']] = prev_samples + 1
+                num_samples += 1
 
-                if jsonl_file:
-                    json.dump({'text': payload_str,
-                               'meta': {k: str(msg[k]) for k in msg.keys()}, 'labels': []}, jsonl_file)
-                    jsonl_file.write('\n')
+                with open(os.path.join(corpus_dir, src['warc_file']), 'rb') as f:
+                    f.seek(src['warc_offset'])
+                    record = next(ArchiveIterator(f))
 
-                if text_file:
-                    text_file.write(normalize_fasttext_input(payload_str))
-                    text_file.write('\n')
+                    msg_url = record.rec_headers.get_header('WARC-News-URL')
+                    progress_bar.update()
 
-            if num_samples >= total_mails:
-                break
+                    payload = record.content_stream().read()
+                    payload_str = '\n'.join(decode_message_part(p) for p in email.message_from_bytes(payload).walk()
+                                            if p.get_content_type() == 'text/plain')
 
-        if jsonl_file:
-            jsonl_file.close()
+                    # skip empty or binary payload
+                    if not payload_str or re.match(r'^\s*=\s*ybegin\s', payload_str):
+                        continue
 
+                    if output_dir:
+                        output_file = os.path.join(output_dir, msg_url.replace('news:', '').replace('/', '') + '.eml')
+                        open(output_file, 'wb').write(payload + b'\n')
 
-def decode_message_part(message_part):
-    charset = message_part.get_content_charset()
-    if charset is None or charset == '7-bit' or charset == '7bit':
-        charset = 'us-ascii'
-    elif charset == '8-bit' or charset == '8bit':
-        charset = 'iso-8859-15'
-    try:
-        return message_part.get_payload(decode=True).decode(charset, errors='ignore')
-    except LookupError:
-        return message_part.get_payload(decode=True).decode('us-ascii', errors='ignore')
+                    if jsonl_file:
+                        json.dump({'text': payload_str,
+                                   'meta': {k: str(src[k]) for k in src.keys()}, 'labels': []}, jsonl_file)
+                        jsonl_file.write('\n')
+
+                    if text_file:
+                        text_file.write(normalize_message_text(payload_str))
+                        text_file.write('\n')
+
+                if num_samples >= total_mails:
+                    break
+
+            results = ES.scroll(scroll_id=results['_scroll_id'], scroll='3m')
+
+    if jsonl_file:
+        jsonl_file.close()
 
 
 if __name__ == '__main__':
