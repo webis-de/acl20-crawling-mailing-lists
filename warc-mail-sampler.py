@@ -95,21 +95,20 @@ def main(index, corpus_dir, output_dir=None, output_jsonl=None, output_text=None
                     progress_bar.set_description('Sampling messages')
                     progress_bar.total = total_mails
                     progress_bar.n = 0
-                    progress_bar.refresh(0)
+                    progress_bar.last_print_n = 0
+                    progress_bar.update(0)
 
                 src = hit['_source']
                 prev_samples = sampled_groups.get(src['groupname'], 0)
                 if group_limit and prev_samples > group_limit:
                     continue
                 sampled_groups[src['groupname']] = prev_samples + 1
-                num_samples += 1
 
                 with open(os.path.join(corpus_dir, src['warc_file']), 'rb') as f:
                     f.seek(src['warc_offset'])
                     record = next(ArchiveIterator(f))
 
                     msg_url = record.rec_headers.get_header('WARC-News-URL')
-                    progress_bar.update()
 
                     payload = record.content_stream().read()
                     payload_str = '\n'.join(decode_message_part(p) for p in email.message_from_bytes(payload).walk()
@@ -118,6 +117,9 @@ def main(index, corpus_dir, output_dir=None, output_jsonl=None, output_text=None
                     # skip empty or binary payload
                     if not payload_str or re.match(r'^\s*=\s*ybegin\s', payload_str):
                         continue
+
+                    num_samples += 1
+                    progress_bar.update()
 
                     if output_dir:
                         output_file = os.path.join(output_dir, msg_url.replace('news:', '').replace('/', '') + '.eml')
