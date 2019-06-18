@@ -112,7 +112,7 @@ def main(index, corpus_dir, output_dir=None, output_jsonl=None, output_text=None
 
                     payload = record.content_stream().read()
                     payload_str = '\n'.join(decode_message_part(p) for p in email.message_from_bytes(payload).walk()
-                                            if p.get_content_type() == 'text/plain')
+                                            if p.get_content_type() == 'text/plain').strip()
 
                     # skip empty or binary payload
                     if not payload_str or re.match(r'^\s*=\s*ybegin\s', payload_str):

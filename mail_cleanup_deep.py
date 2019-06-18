@@ -306,12 +306,12 @@ def export_mail_annotation_spans(predictions_softmax, pred_sequence, output_file
     skip_lines = CONTEXT
 
     def write_annotations(d, a):
-        d = d.copy()
+        if not a or 'text' not in d or not d['text']:
+            return
 
-        if 'id' in d:
-            del d['id']
+        d = {k: d[k] for k in d if k != 'id'}
+        d.update({'labels': a, 'annotations': a, 'text': d['text'].lstrip()})
 
-        d.update({'labels': a, 'annotations': a})
         json.dump(d, output_file)
         output_file.write('\n')
 
@@ -332,25 +332,26 @@ def export_mail_annotation_spans(predictions_softmax, pred_sequence, output_file
 
         cur_offset = len(text) - 1
         text += line
+        text = text.lstrip()
+
+        if i in pred_sequence.mail_end_index_map:
+            if output_file:
+                if prev_label not in ['<pad>', '<empty>']:
+                    annotations.append((start_offset, cur_offset, prev_label))
+                write_annotations(mail_dict, annotations)
+
+            mail_dict = None
+            annotations.clear()
+            start_offset = 0
+            prev_label = None
+            text = ''
+            skip_lines += CONTEXT * 2
+            continue
 
         if verbose:
             print(' {:>20}    --->    {}'.format(label_text, line), end='')
 
-        if i + 1 in pred_sequence.mail_end_index_map:
-            skip_lines += CONTEXT * 2 + 1
-
-            if output_file:
-                if cur_label not in ['<pad>', '<empty>']:
-                    annotations.append((start_offset, len(text) - 1, cur_label))
-
-                write_annotations(mail_dict, annotations)
-                mail_dict = None
-                annotations.clear()
-                start_offset = 0
-                prev_label = None
-                text = ''
-
-        elif cur_label != prev_label:
+        if cur_label != prev_label:
             if output_file and prev_label not in ['<pad>', '<empty>']:
                 annotations.append((start_offset, cur_offset, prev_label))
 
