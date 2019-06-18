@@ -24,11 +24,11 @@ ES = None
     skip=('Skip ahead n messages', 'option', 's', int, None, 'SKIP')
 )
 def main(index, corpus_dir, output_dir=None, output_jsonl=None, output_text=None,
-         total_mails=10000, group_limit=None, skip=None):
+         total_mails=10000, group_limit=None, skip=0):
     scroll_size = 2000
 
     global ES
-    ES = Elasticsearch(['betaweb015'], sniff_on_start=True, sniff_on_connection_fail=True)
+    ES = Elasticsearch(['betaweb015'], sniff_on_start=True, sniff_on_connection_fail=True, timeout=60)
 
     if output_dir and not os.path.isdir(output_dir):
         os.makedirs(output_dir)
@@ -75,19 +75,27 @@ def main(index, corpus_dir, output_dir=None, output_jsonl=None, output_text=None
         "size": 30
     })
 
-    if skip:
+    if skip > 0:
         print('Skipping ahead {} messages...'.format(skip))
 
     sampled_groups = {}
     num_samples = 0
     num_skipped = 0
 
-    with tqdm(desc='Sampling messages', total=total_mails, unit=' messages') as progress_bar:
+    with tqdm(desc='Calculating progress', unit=' messages') as progress_bar:
         while num_samples < total_mails and len(results['hits']['hits']) > 0:
             for hit in results['hits']['hits']:
-                if skip and num_skipped < skip:
+                if skip > 0 and num_skipped < skip:
+                    progress_bar.set_description('Skipping messages')
+                    progress_bar.total = skip
                     num_skipped += 1
+                    progress_bar.update()
                     continue
+                elif (skip == 0 or num_skipped >= skip) and num_samples == 0:
+                    progress_bar.set_description('Sampling messages')
+                    progress_bar.total = total_mails
+                    progress_bar.n = 0
+                    progress_bar.refresh(0)
 
                 src = hit['_source']
                 prev_samples = sampled_groups.get(src['groupname'], 0)
