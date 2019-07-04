@@ -63,16 +63,15 @@ def main(index, corpus_dir, output_dir=None, output_jsonl=None, output_text=None
                         "analyze_wildcard": True
                     }
                 }, {
-                    # Comp, Linux
+                    # Comp, Linux, OS, User
                     "query_string": {
-                        "query": "groupname:(*.comp* OR *.linux*)",
+                        "query": "groupname:(gmane.comp.* OR gmane.linux.* OR gmane.os.* OR *.user)",
                         "analyze_wildcard": True
                     }
                 }]
             }
         },
-        "sort": ["warc_id"],
-        "size": 30
+        "sort": ["warc_id"]
     })
 
     if skip > 0:

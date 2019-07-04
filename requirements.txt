@@ -12,6 +12,7 @@ plac
 pybind11
 psycopg2-binary
 spacy
+spacy_langdetect
 https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-2.1.0a7/en_core_web_sm-2.1.0a7.tar.gz
 scikit-learn
 scipy
