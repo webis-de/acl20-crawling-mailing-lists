@@ -42,7 +42,7 @@ def main(index, corpus_dir, output_dir=None, output_jsonl=None, output_text=None
         text_file = open(output_text, 'w')
 
     print('Retrieving initial batch...')
-    results = ES.search(index=index, scroll='3m', size=scroll_size, body={
+    results = ES.search(index=index, scroll='10m', size=scroll_size, body={
         "query": {
             "bool": {
                 "filter": {
@@ -136,7 +136,7 @@ def main(index, corpus_dir, output_dir=None, output_jsonl=None, output_text=None
                 if num_samples >= total_mails:
                     break
 
-            results = ES.scroll(scroll_id=results['_scroll_id'], scroll='3m')
+            results = ES.scroll(scroll_id=results['_scroll_id'], scroll='10m')
 
     if jsonl_file:
         jsonl_file.close()
