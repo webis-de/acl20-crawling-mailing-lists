@@ -23,52 +23,53 @@ def main(input_file, index):
 def start_indexer(input_file, index):
     print('Creating index...')
 
-    ES.indices.create(index=index, body={
-        'settings': {
-            'number_of_replicas': 2,
-            'number_of_shards': 5
-        },
-        'mappings': {
-            'message': {
-                'properties': {
-                    '@timestamp': {'type': 'date', 'format': 'yyyy-MM-dd HH:mm:ss'},
+    if not ES.indices.exists(index=index):
+        ES.indices.create(index=index, body={
+            'settings': {
+                'number_of_replicas': 2,
+                'number_of_shards': 5
+            },
+            'mappings': {
+                'message': {
+                    'properties': {
+                        '@timestamp': {'type': 'date', 'format': 'yyyy-MM-dd HH:mm:ss'},
 
-                    'groupname': {'type': 'keyword'},
-                    'warc_file': {'type': 'keyword'},
-                    'warc_offset': {'type': 'long'},
-                    'warc_id': {'type': 'keyword'},
-                    'news_url': {'type': 'keyword'},
+                        'groupname': {'type': 'keyword'},
+                        'warc_file': {'type': 'keyword'},
+                        'warc_offset': {'type': 'long'},
+                        'warc_id': {'type': 'keyword'},
+                        'news_url': {'type': 'keyword'},
 
-                    'full_text': {'type': 'text'},
-                    'lang': {'type': 'keyword'},
+                        'full_text': {'type': 'text'},
+                        'lang': {'type': 'keyword'},
 
-                    'label_stats': {
-                        'properties': {
-                            'paragraph_quotation.num_ratio': {'type': 'float'},
-                            'paragraph_quotation.lines_ratio': {'type': 'float'}
+                        'label_stats': {
+                            'properties': {
+                                'paragraph_quotation.num_ratio': {'type': 'float'},
+                                'paragraph_quotation.lines_ratio': {'type': 'float'}
+                            }
                         }
-                    }
-                },
-                "dynamic": True,
-                'dynamic_templates': [
-                    {
-                        'stats': {
-                            'path_match': 'label_stats.*',
-                            'mapping': {
-                                'type': 'object',
-                                'properties': {
-                                    'num': {'type': 'integer'},
-                                    'chars': {'type': 'integer'},
-                                    'lines': {'type': 'integer'},
-                                    'avg_len': {'type': 'float'}
+                    },
+                    "dynamic": True,
+                    'dynamic_templates': [
+                        {
+                            'stats': {
+                                'path_match': 'label_stats.*',
+                                'mapping': {
+                                    'type': 'object',
+                                    'properties': {
+                                        'num': {'type': 'integer'},
+                                        'chars': {'type': 'integer'},
+                                        'lines': {'type': 'integer'},
+                                        'avg_len': {'type': 'float'}
+                                    }
                                 }
                             }
                         }
-                    }
-                ]
+                    ]
+                }
             }
-        }
-    })
+        })
 
     helpers.bulk(ES, generate_messages(index, input_file))
 
