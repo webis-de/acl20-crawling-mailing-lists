@@ -4,6 +4,7 @@ from util import *
 
 from datetime import datetime
 import fastText
+from glob import glob
 from itertools import chain
 from keras import callbacks, layers, models
 from keras.utils import Sequence
@@ -209,11 +210,13 @@ def predict(input_model, input_file, output_json=None):
     if output_json:
         output_json_file = open(output_json, 'w')
 
-    to_stdout = output_json is None
-    train_seq = MailLinesSequence(input_file, labeled=False, batch_size=256)
-    predictions = line_model.predict_generator(train_seq, verbose=(not to_stdout),
-                                               steps=(None if not to_stdout else 10))
-    export_mail_annotation_spans(predictions, train_seq, output_json_file, verbose=to_stdout)
+    for fname in glob(input_file):
+        print('Predicting {}...'.format(fname))
+        to_stdout = output_json is None
+        train_seq = MailLinesSequence(fname, labeled=False, batch_size=256)
+        predictions = line_model.predict_generator(train_seq, verbose=(not to_stdout),
+                                                   steps=(None if not to_stdout else 10))
+        export_mail_annotation_spans(predictions, train_seq, output_json_file, verbose=to_stdout)
 
     if output_json_file:
         output_json_file.close()
