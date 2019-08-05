@@ -1,22 +1,27 @@
 from concurrent.futures import ThreadPoolExecutor
 from elasticsearch import Elasticsearch, helpers
+import email
+import email.utils
 from glob import glob
 import signal
-import mailparser
 from multiprocessing import Queue
 import plac
 import os
 import re
+import spacy
+from spacy_langdetect import LanguageDetector
 import sys
 from time import sleep
 from tqdm import tqdm
 from threading import Thread
+from util import decode_message_part
 from warcio import ArchiveIterator
 
 
 __SHUTDOWN_FLAG = False
 
 ES = None
+NLP = None
 
 
 @plac.annotations(
@@ -28,8 +33,11 @@ def main(input_dir, index, workers=10):
     signal.signal(signal.SIGTERM, lambda s, f: signal_shutdown())
     signal.signal(signal.SIGINT, lambda s, f: signal_shutdown())
 
-    global ES
-    ES = Elasticsearch(['betaweb015'], sniff_on_start=True, sniff_on_connection_fail=True)
+    global ES, NLP
+    ES = Elasticsearch(['betaweb015'], sniff_on_start=True, sniff_on_connection_fail=True, timeout=360)
+
+    NLP = spacy.load('en_core_web_sm')
+    NLP.add_pipe(LanguageDetector(), name='language_detector', last=True)
 
     indexer_thread = Thread(target=start_indexer, args=(input_dir, index, workers))
     indexer_thread.daemon = False
@@ -43,24 +51,28 @@ def main(input_dir, index, workers=10):
 
 
 def start_indexer(input_dir, index, workers):
-    ES.indices.create(index=index, body={
-        'settings': {
-            'number_of_replicas': 2,
-            'number_of_shards': 10
-        },
-        'mappings': {
-            'message': {
-                'properties': {
-                    '@timestamp': {'type': 'date', 'format': 'yyyy-MM-dd HH:mm:ss'},
-                    'groupname': {'type': 'keyword'},
-                    'warc_file': {'type': 'keyword'},
-                    'warc_offset': {'type': 'long'},
-                    'warc_id': {'type': 'keyword'},
-                    'news_url': {'type': 'keyword'}
+    if not ES.indices.exists(index=index):
+        ES.indices.create(index=index, body={
+            'settings': {
+                'number_of_replicas': 0,
+                'number_of_shards': 15
+            },
+            'mappings': {
+                'message': {
+                    'properties': {
+                        '@timestamp': {'type': 'date', 'format': 'yyyy-MM-dd HH:mm:ssZZ'},
+                        'groupname': {'type': 'keyword'},
+                        'warc_file': {'type': 'keyword'},
+                        'warc_offset': {'type': 'long'},
+                        'warc_id': {'type': 'keyword'},
+                        'news_url': {'type': 'keyword'},
+                        'lang': {'type': 'keyword'},
+                        'text_plain': {'type': 'text'},
+                        'text_html': {'type': 'text'}
+                    }
                 }
             }
-        }
-    })
+        })
 
     print("Listing groups...", file=sys.stderr)
     newsgroups = [os.path.basename(d) for d in glob(os.path.join(input_dir, '*'))]
@@ -105,26 +117,35 @@ def generate_message(index, group, filename):
     with open(filename, 'rb') as f:
         iterator = ArchiveIterator(f)
         for record in iterator:
-            headers = record.rec_headers
+            warc_headers = record.rec_headers
             body = record.content_stream().read()
-            mail = mailparser.parse_from_bytes(body)
+            mail = email.message_from_bytes(body)
 
-            mail_headers = {k.lower(): mail.headers[k] for k in mail.headers}
+            mail_text = '\n'.join(decode_message_part(p) for p in mail.walk()
+                                  if p.get_content_type() == 'text/plain').strip()
+            mail_html = '\n'.join(decode_message_part(p) for p in mail.walk()
+                                  if p.get_content_type() == 'text/html').strip()
+
+            mail_headers = {h.lower(): str(mail[h]) for h in mail}
             from_header = mail_headers.get('from', '')
             from_email = re.search(email_regex, from_header)
+
+            try:
+                mail_date = str(email.utils.parsedate_to_datetime(mail_headers.get('date')))
+            except TypeError:
+                mail_date = None
 
             yield {
                 '_index': index,
                 '_type': 'message',
-                '_id': None,
+                '_id': warc_headers.get_header('WARC-Record-ID'),
                 '_source': {
-                    '@timestamp': str(mail.date) if mail.date is not None else None,
+                    '@timestamp': mail_date,
                     'groupname': group,
                     'warc_file': os.path.join(os.path.basename(os.path.dirname(filename)),
                                               os.path.basename(filename)),
                     'warc_offset': iterator.offset,
-                    'warc_id': headers.get_header('WARC-Record-ID'),
-                    'news_url': headers.get_header('WARC-News-URL'),
+                    'news_url': warc_headers.get_header('WARC-News-URL'),
                     'headers': {
                         'message_id': mail_headers.get('message-is'),
                         'from': from_header,
@@ -134,7 +155,10 @@ def generate_message(index, group, filename):
                         'cc': mail_headers.get('cc'),
                         'in_reply_to': mail_headers.get('in-reply-to'),
                         'list_id': mail_headers.get('list-id')
-                    }
+                    },
+                    'lang': NLP(mail_text)._.language['language'],
+                    'text_plain': mail_text,
+                    'text_html': mail_html
                 }
             }
 
