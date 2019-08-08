@@ -47,7 +47,7 @@ label_map = labels_to_onehot(label_map_int)
 INPUT_DIM = 100
 OUTPUT_DIM = len(label_map)
 BATCH_SIZE = 128
-MAX_LEN = 15
+MAX_LEN = 12
 CONTEXT = 4
 
 
@@ -159,13 +159,17 @@ class MailLinesSequence(Sequence):
 
 
 def pad_2d_sequence(seq, max_len):
-    return np.pad(seq[:max_len], ((0, max(0, max_len - seq.shape[0])), (0, 0)), 'constant')
+    if seq.shape[0] > max_len:
+        pivot_idx = int(np.ceil(max_len * .75))
+        seq = np.concatenate((seq[:pivot_idx], seq[seq.shape[0] - max_len + pivot_idx:]))
+
+    return np.pad(seq, ((0, max(0, max_len - seq.shape[0])), (0, 0)), 'constant')
 
 
 def train_model(input_file, output_model, validation_input=None):
     tb_callback = callbacks.TensorBoard(log_dir='./data/graph/' + str(datetime.now()), update_freq=1000,
                                         histogram_freq=0, write_grads=True, write_graph=False, write_images=False)
-    es_callback = callbacks.EarlyStopping(monitor='val_loss', verbose=1, patience=7)
+    es_callback = callbacks.EarlyStopping(monitor='val_loss', verbose=1, patience=5)
     cp_callback = callbacks.ModelCheckpoint(output_model + '.epoch-{epoch:02d}.loss-{val_loss:.2f}.hdf5')
 
     line_input = layers.Input(shape=(MAX_LEN, INPUT_DIM))
@@ -175,10 +179,10 @@ def train_model(input_file, output_model, validation_input=None):
     bi_gru = layers.Activation('relu')(bi_gru)
 
     context_input = layers.Input(shape=(CONTEXT * 2 + 1, MAX_LEN, INPUT_DIM))
-    conv2d = layers.Conv2D(64, (4, 4))(context_input)
+    conv2d = layers.Conv2D(128, (4, 4))(context_input)
     conv2d = layers.BatchNormalization()(conv2d)
     conv2d = layers.Activation('relu')(conv2d)
-    conv2d = layers.Conv2D(32, (3, 3))(conv2d)
+    conv2d = layers.Conv2D(64, (3, 3))(conv2d)
     conv2d = layers.Activation('relu')(conv2d)
     conv2d = layers.MaxPooling2D(2)(conv2d)
     flatten = layers.Flatten()(conv2d)
@@ -187,7 +191,7 @@ def train_model(input_file, output_model, validation_input=None):
 
     concat = layers.concatenate([bi_gru, dense_1])
 
-    dropout = layers.Dropout(0.5)(concat)
+    dropout = layers.Dropout(0.25)(concat)
     dense_2 = layers.Dense(OUTPUT_DIM)(dropout)
     softmax = layers.Activation('softmax')(dense_2)
 
