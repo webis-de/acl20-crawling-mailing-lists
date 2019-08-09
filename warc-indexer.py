@@ -76,7 +76,7 @@ def start_indexer(input_dir, index, workers):
         })
 
     print("Listing groups...", file=sys.stderr)
-    newsgroups = [os.path.basename(d) for d in glob(os.path.join(input_dir, '*'))]
+    newsgroups = [os.path.basename(d) for d in glob(os.path.join(input_dir, 'gmane.*'))]
 
     print("Indexing group meta data...", file=sys.stderr)
     queue = Queue(maxsize=workers)
@@ -139,6 +139,12 @@ def generate_message(index, group, filename):
             except TypeError:
                 mail_date = None
 
+            try:
+                lang = NLP(mail_text)._.language['language']
+            except Exception as e:
+                lang = 'UNKNOWN'
+                print(e, file=sys.stderr)
+
             yield {
                 '_index': index,
                 '_type': 'message',
@@ -160,7 +166,7 @@ def generate_message(index, group, filename):
                         'in_reply_to': mail_headers.get('in-reply-to'),
                         'list_id': mail_headers.get('list-id')
                     },
-                    'lang': NLP(mail_text)._.language['language'],
+                    'lang': lang,
                     'text_plain': mail_text,
                     'text_html': mail_html
                 }
