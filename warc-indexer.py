@@ -56,7 +56,7 @@ def start_indexer(input_dir, index, workers):
         ES.indices.create(index=index, body={
             'settings': {
                 'number_of_replicas': 0,
-                'number_of_shards': 15
+                'number_of_shards': 30
             },
             'mappings': {
                 'message': {
