@@ -6,6 +6,7 @@ from glob import glob
 import signal
 from multiprocessing import Queue
 import plac
+import pytz
 import os
 import re
 import spacy
@@ -131,7 +132,10 @@ def generate_message(index, group, filename):
             from_email = re.search(email_regex, from_header)
 
             try:
-                mail_date = str(email.utils.parsedate_to_datetime(mail_headers.get('date')))
+                d = email.utils.parsedate_to_datetime(mail_headers.get('date'))
+                if not d.tzinfo or d.tzinfo.utcoffset(d) is None:
+                    d = pytz.utc.localize(d)
+                mail_date = str(d)
             except TypeError:
                 mail_date = None
 
