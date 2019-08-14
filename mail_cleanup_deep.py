@@ -48,7 +48,7 @@ INPUT_DIM = 100
 OUTPUT_DIM = len(label_map)
 BATCH_SIZE = 128
 MAX_LEN = 12
-CONTEXT = 4
+CONTEXT = 5
 
 
 @plac.annotations(
@@ -121,6 +121,7 @@ class MailLinesSequence(Sequence):
         index = index * self.batch_size
 
         batch = np.empty((self.batch_size,) + self.line_shape)
+        batch_prev = np.empty((self.batch_size,) + self.line_shape)
         batch_context = np.empty((self.batch_size, CONTEXT * 2 + 1) + self.line_shape)
         batch_labels = np.empty((self.batch_size, OUTPUT_DIM))
 
@@ -150,12 +151,13 @@ class MailLinesSequence(Sequence):
                     line_vecs.append(pad_2d_sequence(get_word_vectors(c), self.line_shape[0]))
 
             batch[i - CONTEXT] = line_vecs[CONTEXT]
+            batch_prev[i - CONTEXT] = line_vecs[CONTEXT - 1]
             batch_context[i - CONTEXT] = np.stack(line_vecs)
 
         if self.labeled:
-            return [batch, batch_context], batch_labels
+            return [batch, batch_prev, batch_context], batch_labels
 
-        return [batch, batch_context]
+        return [batch, batch_prev, batch_context]
 
 
 def pad_2d_sequence(seq, max_len):
@@ -172,30 +174,37 @@ def train_model(input_file, output_model, validation_input=None):
     es_callback = callbacks.EarlyStopping(monitor='val_loss', verbose=1, patience=5)
     cp_callback = callbacks.ModelCheckpoint(output_model + '.epoch-{epoch:02d}.loss-{val_loss:.2f}.hdf5')
 
-    line_input = layers.Input(shape=(MAX_LEN, INPUT_DIM))
-    masking = layers.Masking(0)(line_input)
-    bi_gru = layers.Bidirectional(layers.GRU(128), merge_mode='sum')(masking)
-    bi_gru = layers.BatchNormalization()(bi_gru)
-    bi_gru = layers.Activation('relu')(bi_gru)
+    def get_base_line_model():
+        line_input = layers.Input(shape=(MAX_LEN, INPUT_DIM))
+        masking = layers.Masking(0)(line_input)
+        bi_gru = layers.Bidirectional(layers.GRU(128), merge_mode='sum')(masking)
+        bi_gru = layers.BatchNormalization()(bi_gru)
+        bi_gru = layers.Activation('relu')(bi_gru)
+        return line_input, bi_gru
 
-    context_input = layers.Input(shape=(CONTEXT * 2 + 1, MAX_LEN, INPUT_DIM))
-    conv2d = layers.Conv2D(128, (4, 4))(context_input)
-    conv2d = layers.BatchNormalization()(conv2d)
-    conv2d = layers.Activation('relu')(conv2d)
-    conv2d = layers.Conv2D(64, (3, 3))(conv2d)
-    conv2d = layers.Activation('relu')(conv2d)
-    conv2d = layers.MaxPooling2D(2)(conv2d)
-    flatten = layers.Flatten()(conv2d)
-    dense_1 = layers.Dense(128)(flatten)
-    dense_1 = layers.Activation('relu')(dense_1)
+    def get_context_model():
+        context_input = layers.Input(shape=(CONTEXT * 2 + 1, MAX_LEN, INPUT_DIM))
+        conv2d = layers.Conv2D(128, (4, 4))(context_input)
+        conv2d = layers.BatchNormalization()(conv2d)
+        conv2d = layers.Activation('relu')(conv2d)
+        conv2d = layers.Conv2D(64, (3, 3))(conv2d)
+        conv2d = layers.Activation('relu')(conv2d)
+        conv2d = layers.MaxPooling2D(2)(conv2d)
+        flatten = layers.Flatten()(conv2d)
+        dense = layers.Dense(128)(flatten)
+        dense = layers.Activation('relu')(dense)
+        return context_input, dense
 
-    concat = layers.concatenate([bi_gru, dense_1])
+    line_input_cur, line_model_cur = get_base_line_model()
+    line_input_prev, line_model_prev = get_base_line_model()
+    context_input, context_model = get_context_model()
 
+    concat = layers.concatenate([line_model_cur, line_model_prev, context_model])
     dropout = layers.Dropout(0.25)(concat)
     dense_2 = layers.Dense(OUTPUT_DIM)(dropout)
     softmax = layers.Activation('softmax')(dense_2)
 
-    line_model = models.Model(inputs=[line_input, context_input], outputs=softmax)
+    line_model = models.Model(inputs=[line_input_cur, line_input_prev, context_input], outputs=softmax)
     line_model.compile(optimizer='adam', loss='categorical_crossentropy',
                        metrics=['categorical_accuracy', 'mean_squared_error'])
     line_model.summary()
