@@ -48,7 +48,7 @@ INPUT_DIM = 100
 OUTPUT_DIM = len(label_map)
 BATCH_SIZE = 128
 MAX_LEN = 12
-CONTEXT = 5
+CONTEXT = 4
 
 
 @plac.annotations(
@@ -66,14 +66,16 @@ def main(cmd, model, input_file, fasttext_model, output_json=None, validation_in
     if cmd == 'train':
         train_model(input_file, model, validation_input)
     elif cmd == 'predict':
-        predict(model, input_file, output_json)
+        line_model = models.load_model(model + '.hdf5')
+        line_model._make_predict_function()
+        predict(line_model, input_file, output_json)
     else:
         print('Invalid command.', file=sys.stderr)
         exit(1)
 
 
 class MailLinesSequence(Sequence):
-    def __init__(self, input_file, labeled=True, batch_size=None, line_shape=(MAX_LEN, INPUT_DIM)):
+    def __init__(self, input_file, labeled=True, batch_size=None, line_shape=(MAX_LEN, INPUT_DIM), raw_mail=False):
         self.labeled = labeled
         self.mail_lines = []
         self.mail_start_index_map = {}
@@ -87,7 +89,10 @@ class MailLinesSequence(Sequence):
         else:
             self.padding_line = [None]
 
-        self._load_json(input_file)
+        if not raw_mail:
+            self._load_json(input_file)
+        else:
+            self._load_raw_mail(input_file)
 
     def _load_json(self, input_file):
         context_padding = self.padding_line * CONTEXT
@@ -110,6 +115,17 @@ class MailLinesSequence(Sequence):
                 self.mail_start_index_map[len(self.mail_lines) + CONTEXT] = mail_json
                 self.mail_end_index_map[len(self.mail_lines) + CONTEXT + len(lines)] = mail_json
                 self.mail_lines.extend(context_padding + lines + context_padding)
+
+        if self.batch_size is None:
+            self.batch_size = len(self.mail_lines)
+
+    def _load_raw_mail(self, mail_contents):
+        load_fasttext_model('data/email-vectors.bin')
+        lines = [l + '\n' for l in mail_contents.split('\n')]
+
+        if lines:
+            context_padding = self.padding_line * CONTEXT
+            self.mail_lines.extend(context_padding + lines + context_padding)
 
         if self.batch_size is None:
             self.batch_size = len(self.mail_lines)
@@ -216,9 +232,7 @@ def train_model(input_file, output_model, validation_input=None):
                              max_queue_size=100, callbacks=[tb_callback, es_callback, cp_callback])
 
 
-def predict(input_model, input_file, output_json=None):
-    line_model = models.load_model(input_model + '.hdf5')
-
+def predict(line_model, input_file, output_json=None):
     output_json_file = None
     if output_json:
         output_json_file = open(output_json, 'w')
@@ -226,13 +240,20 @@ def predict(input_model, input_file, output_json=None):
     for fname in glob(input_file):
         print('Predicting {}...'.format(fname))
         to_stdout = output_json is None
-        train_seq = MailLinesSequence(fname, labeled=False, batch_size=256)
-        predictions = line_model.predict_generator(train_seq, verbose=(not to_stdout),
+        pred_seq = MailLinesSequence(fname, labeled=False, batch_size=256)
+        predictions = line_model.predict_generator(pred_seq, verbose=(not to_stdout),
                                                    steps=(None if not to_stdout else 10))
-        export_mail_annotation_spans(predictions, train_seq, output_json_file, verbose=to_stdout)
+        export_mail_annotation_spans(predictions, pred_seq, output_json_file, verbose=to_stdout)
 
     if output_json_file:
         output_json_file.close()
+
+
+def predict_raw_email(line_model, email):
+    pred_seq = MailLinesSequence(email, labeled=False, raw_mail=True)
+    return (pred for i, pred in
+            enumerate(post_process_labels(pred_seq.mail_lines, line_model.predict_generator(pred_seq)))
+            if CONTEXT <= i < len(pred_seq.mail_lines) - CONTEXT)
 
 
 def post_process_labels(lines, labels_softmax):
@@ -408,7 +429,8 @@ _model = None
 
 def load_fasttext_model(model_path):
     global _model
-    _model = fastText.load_model(model_path)
+    if not _model:
+        _model = fastText.load_model(model_path)
 
 
 def get_word_vectors(text):
