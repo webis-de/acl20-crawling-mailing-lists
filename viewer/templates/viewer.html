@@ -26,18 +26,18 @@
                     }
                 },
                 {"term": {"lang": "en"}},
-                {"wildcard": {"text_plain": "?*"}},
+                {"wildcard": {"text_plain.keyword": "?*"}},
                 {
                     "bool": {
                         "should": [
-                            {"wildcard": {"headers.message_id.keyword": "?*"}}
+                            {"wildcard": {"headers.message_id.keyword": "*"}}
                         ]
                     }
                 }
             ]
         }
     },
-    "size": 100
+    "size": 50
 }</pre>
             </div>
             <div class="uk-margin">
