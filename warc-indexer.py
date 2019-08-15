@@ -157,7 +157,7 @@ def generate_message(index, group, filename):
                     'warc_offset': iterator.offset,
                     'news_url': warc_headers.get_header('WARC-News-URL'),
                     'headers': {
-                        'message_id': mail_headers.get('message-is'),
+                        'message_id': mail_headers.get('message-id'),
                         'from': from_header,
                         'from_email': from_email.group(0) if from_email is not None else '',
                         'subject': mail_headers.get('subject'),
