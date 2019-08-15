@@ -43,36 +43,67 @@ def main(index, corpus_dir, output_dir=None, output_jsonl=None, output_text=None
 
     print('Retrieving initial batch...')
     results = ES.search(index=index, scroll='10m', size=scroll_size, body={
+        # "query": {
+        #     "bool": {
+        #         "filter": {
+        #             # Skip Gwene
+        #             "wildcard": {"groupname": "gmane.*"}
+        #         },
+        #         "must_not": [{
+        #             # SCM
+        #             "query_string": {
+        #                 "query": "groupname:(*.patches OR *.commits* OR *.dist-commits* OR *.version-control* " +
+        #                          "OR *.git* OR *.cvs* OR *.svn* OR *.trunk* OR *.scm* OR *.pkg*)",
+        #                 "analyze_wildcard": True
+        #             }
+        #         }, {
+        #             # Bugs
+        #             "query_string": {
+        #                 "query": "groupname:(*.bugs* OR *.issues* OR *.bugzilla* OR *.codereview*)",
+        #                 "analyze_wildcard": True
+        #             }
+        #         }, {
+        #             # Comp, Linux, OS, User
+        #             "query_string": {
+        #                 "query": "groupname:(gmane.comp.* OR gmane.linux.* OR gmane.os.* OR *.user)",
+        #                 "analyze_wildcard": True
+        #             }
+        #         }]
+        #     }
+        # },
+        # "sort": ["warc_id"]
+
         "query": {
             "bool": {
-                "filter": {
-                    # Skip Gwene
-                    "wildcard": {"groupname": "gmane.*"}
-                },
-                "must_not": [{
-                    # SCM
-                    "query_string": {
-                        "query": "groupname:(*.patches OR *.commits* OR *.dist-commits* OR *.version-control* " +
-                                 "OR *.git* OR *.cvs* OR *.svn* OR *.trunk* OR *.scm* OR *.pkg*)",
-                        "analyze_wildcard": True
+                "must": [{
+                    "range": {
+                        "label_stats.paragraph_quotation.num_ratio": {
+                            "gte": 0.8,
+                            "lte": 1.2
+                        }
                     }
                 }, {
-                    # Bugs
-                    "query_string": {
-                        "query": "groupname:(*.bugs* OR *.issues* OR *.bugzilla* OR *.codereview*)",
-                        "analyze_wildcard": True
+                    "range": {
+                        "label_stats.quotation.num": {
+                            "gte": 5
+                        }
                     }
                 }, {
-                    # Comp, Linux, OS, User
-                    "query_string": {
-                        "query": "groupname:(gmane.comp.* OR gmane.linux.* OR gmane.os.* OR *.user)",
-                        "analyze_wildcard": True
+                    "term": {
+                        "lang": {
+                            "value": "en"
+                        }
                     }
-                }]
+                }],
+                # "must_not": [{
+                #     "wildcard": {
+                #         "groupname": "gmane.ietf.*"
+                #     }
+                # }]
             }
         },
-        "sort": ["warc_id"]
-    })
+        "size": 100
+})
 
     if skip > 0:
         print('Skipping ahead {} messages...'.format(skip))
@@ -104,7 +135,7 @@ def main(index, corpus_dir, output_dir=None, output_jsonl=None, output_text=None
                 sampled_groups[src['groupname']] = prev_samples + 1
 
                 with open(os.path.join(corpus_dir, src['warc_file']), 'rb') as f:
-                    f.seek(src['warc_offset'])
+                    f.seek(int(src['warc_offset']))
                     record = next(ArchiveIterator(f))
 
                     msg_url = record.rec_headers.get_header('WARC-News-URL')
