@@ -2,6 +2,7 @@ Cython
 elasticsearch
 mail-parser
 beautifulsoup4
+flask
 fasttextmirror
 keras
 git+https://www.github.com/keras-team/keras-contrib.git
@@ -10,6 +11,7 @@ mailbox
 numpy
 plac
 pybind11
+pytz
 psycopg2-binary
 spacy
 spacy_langdetect

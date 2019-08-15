@@ -1,0 +1,97 @@
+#query-editor {
+    width: auto;
+    height: 400px;
+}
+
+.header-list {
+    font-size: .9rem;
+}
+
+.header-list dt {
+    float: left;
+    margin-right: .8rem;
+}
+
+.header-list dd:after {
+    content: " ";
+    display: block;
+    clear: left;
+}
+
+.labeled-lines td:first-child {
+    font-weight: bold;
+    text-align: right;
+    padding: 0 1em 0 0;
+}
+
+.labeled-lines td:last-child {
+    padding: 0;
+}
+
+.line-label-empty td:first-child {
+    color: rgb(200, 200, 200);
+}
+
+.line-label-paragraph td:first-child {
+    color: rgb(83, 215, 238);
+}
+
+.line-label-patch td:first-child {
+    color: rgb(170, 218, 17);
+}
+
+.line-label-quotation-marker td:first-child {
+    color: rgb(33, 37, 173);
+}
+
+.line-label-closing td:first-child {
+    color: rgb(104, 178, 226);
+}
+
+.line-label-tabular td:first-child {
+    color: rgb(161, 129, 180);
+}
+
+.line-label-salutation td:first-child {
+    color: rgb(246, 223, 4);
+}
+
+.line-label-section-heading td:first-child {
+    color: rgb(254, 201, 92);
+}
+
+.line-label-inline-headers td:first-child {
+    color: rgb(237, 79, 72);
+}
+
+.line-label-log-data td:first-child {
+    color: rgb(193, 196, 9);
+}
+
+.line-label-mua-signature td:first-child {
+    color: rgb(145, 198, 183);
+}
+
+.line-label-quotation td:first-child {
+    color: rgb(180, 14, 183);
+}
+
+.line-label-raw-code td:first-child {
+    color: rgb(166, 8, 36);
+}
+
+.line-label-paragraph td:first-child {
+    color: rgb(83, 215, 238);
+}
+
+.line-label-personal-signature td:first-child {
+    color: rgb(90, 38, 101);
+}
+
+.line-label-technical td:first-child {
+    color: rgb(169, 82, 62);
+}
+
+.line-label-visual-separator td:first-child {
+    color: rgb(123, 128, 126);
+}

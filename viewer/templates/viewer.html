@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Email Corpus Viewer</title>
+    <link rel="stylesheet" href="https://webis.de/css/style.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<script src="https://webis.de/commons/js/thirdparty/uikit/uikit.min.js"></script>
+<script src="https://webis.de/commons/js/thirdparty/uikit/uikit-icons.min.js"></script>
+<main>
+    <div class="uk-section">
+        <div class="uk-container uk-width-1-1">
+            <h1>Email Corpus Explorer</h1>
+
+            <div>
+                <pre id="query-editor">{
+    "query": {
+        "bool": {
+            "filter": [
+                {
+                    "query_string": {
+                        "query": "groupname:gmane.* AND NOT groupname:(*.patches OR *.commits* OR *.dist-commits* OR *.version-control* OR *.git* OR *.cvs* OR *.svn* OR *.trunk* OR *.scm* OR *.pkg*) AND NOT groupname:(*.bugs* OR *.issues* OR *.bugzilla* OR *.codereview*) AND NOT groupname:(gmane.linux.* OR gmane.os.* OR gmane.comp.*)",
+                        "analyze_wildcard": true
+                    }
+                },
+                {"term": {"lang": "en"}},
+                {"wildcard": {"text_plain": "?*"}},
+                {"wildcard": {"text_html": "?*"}}
+            ]
+        }
+    },
+    "size": 100
+}</pre>
+            </div>
+            <div class="uk-margin">
+                <button type="button" class="uk-button uk-button-primary" id="query-button">Submit</button>
+                <div id="query-spinner" class="uk-hidden uk-margin-left" uk-spinner></div>
+            </div>
+        </div>
+
+        <div class="uk-section">
+            <div class="uk-container uk-width-1-1" id="query-results"></div>
+        </div>
+
+    </div>
+</main>
+<script src="{{ url_for('static', filename='js/purify.min.js') }}"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.5/ace.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.5/mode-json.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.5/theme-chrome.js"></script>
+<script>
+    function predictLines() {
+        for (let e of document.querySelectorAll('.plaintext-body')) {
+            if (e.classList.contains('no-content')) {
+                continue;
+            }
+
+            fetch('{{ url_for('predict_lines') }}', {
+                method: 'post',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: e.innerText
+            }).then(response => {
+                return response.json();
+            }).then(json => {
+                let html = '<table class="labeled-lines">';
+                for (let l in json) {
+                    let className = json[l][1].replace('<', '&lt;').replace('>', '&gt;').replace('_', ' ');
+                    let classNameClass = json[l][1].replace('<', '').replace('>', '').replace('_', '-');
+                    html += `<tr class="line-label-${classNameClass}"><td>${className}:</td><td>${json[l][0]}</td></tr>`;
+                }
+                html += '</table>';
+                e.innerHTML = html;
+            });
+        }
+    }
+
+    const queryButton = document.getElementById('query-button');
+    const querySpinner = document.getElementById('query-spinner');
+    const queryResults = document.getElementById('query-results');
+
+    const editor = ace.edit('query-editor');
+    let JsonMode = ace.require("ace/mode/json").Mode;
+    editor.session.setMode(new JsonMode());
+    editor.session.setUseWrapMode(true);
+    editor.commands.addCommand({
+        name: 'submit',
+        bindKey: { win: 'Ctrl-Enter', mac: 'Command-Return' },
+        exec: () => { queryButton.click(); }
+    });
+
+    queryButton.addEventListener('click', e => {
+        querySpinner.classList.remove('uk-hidden');
+
+        fetch('{{ url_for('query_mails') }}', {
+            method: 'post',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: editor.getValue()
+        }).then(response => {
+            return response.json();
+        }).then(json => {
+            queryResults.innerHTML = '';
+
+            for (let hit in json) {
+                let source = json[hit]['_source'];
+
+                let headers = source['headers'];
+                let dl = document.createElement('dl');
+                for (let h in headers) {
+                    if (!headers[h]) {
+                        continue;
+                    }
+                    let dt = document.createElement('dt');
+                    dt.appendChild(document.createTextNode(h.replace('_', '-') + ':'));
+                    let dd = document.createElement('dd');
+                    dd.appendChild(document.createTextNode(headers[h]));
+                    dl.appendChild(dt);
+                    dl.appendChild(dd);
+                }
+                let headerList = document.createElement('div');
+                headerList.classList.add('header-list');
+                headerList.appendChild(dl);
+                queryResults.appendChild(headerList);
+
+                let grid = document.createElement('div');
+                grid.classList.add('uk-grid', 'uk-grid-large', 'uk-child-width-1-2');
+                grid.dataset.ukGrid = null;
+
+                let plainText = document.createElement('div');
+                plainText.appendChild(document.createElement('pre'));
+                plainText.firstChild.classList.add('plaintext-body');
+
+                if (source['text_plain'].trim()) {
+                    plainText.firstChild.innerText = source['text_plain'];
+                } else {
+                    plainText.appendChild(document.createTextNode('<no plaintext content>'));
+                    plainText.classList.add('no-content');
+                }
+                grid.appendChild(plainText);
+
+                let html = document.createElement('div');
+                html.classList.add('html-body');
+
+                if (source['text_html'].trim()) {
+                    let shadow = html.attachShadow({mode: 'open'});
+                    shadow.innerHTML = DOMPurify.sanitize(source['text_html']);
+                } else {
+                    html.appendChild(document.createTextNode('<no html content>'));
+                    html.classList.add('no-content');
+                }
+                grid.appendChild(html);
+
+                let container = document.createElement('div');
+                container.classList.add('query-result', 'uk-margin-large-bottom');
+                container.appendChild(grid);
+                queryResults.appendChild(container);
+                UIkit.update();
+            }
+
+            querySpinner.classList.add('uk-hidden');
+            predictLines();
+        });
+    });
+</script>
+</body>
+</html>
