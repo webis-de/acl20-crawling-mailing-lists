@@ -71,7 +71,7 @@ def start_indexer(input_file, index):
             }
         })
 
-    helpers.bulk(ES, generate_messages(index, input_file))
+    helpers.bulk(ES, generate_messages(index, input_file), timeout='240s')
 
 
 def generate_messages(index, input_file):
@@ -114,10 +114,13 @@ def generate_messages(index, input_file):
 
             source['label_stats'] = dict(stats)
 
+            if not source.get('@timestamp') or source.get('@timestamp') == 'None':
+                continue
+
             yield {
                 '_index': index,
                 '_type': 'message',
-                '_id': None,
+                '_id': source.get('warc_id'),
                 '_source': source
             }
 
