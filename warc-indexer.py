@@ -35,7 +35,7 @@ def main(input_dir, index, workers=10):
     signal.signal(signal.SIGINT, lambda s, f: signal_shutdown())
 
     global ES, NLP
-    ES = Elasticsearch(['betaweb015'], sniff_on_start=True, sniff_on_connection_fail=True, timeout=360)
+    ES = Elasticsearch(['betaweb015', 'betaweb017', 'betaweb020'], sniff_on_start=True, sniff_on_connection_fail=True, timeout=360)
 
     NLP = spacy.load('en_core_web_sm')
     NLP.add_pipe(LanguageDetector(), name='language_detector', last=True)
