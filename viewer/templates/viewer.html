@@ -27,7 +27,13 @@
                 },
                 {"term": {"lang": "en"}},
                 {"wildcard": {"text_plain": "?*"}},
-                {"wildcard": {"text_html": "?*"}}
+                {
+                    "bool": {
+                        "should": [
+                            {"wildcard": {"headers.message_id.keyword": "?*"}}
+                        ]
+                    }
+                }
             ]
         }
     },
@@ -68,14 +74,33 @@
             }).then(json => {
                 let html = '<table class="labeled-lines">';
                 for (let l in json) {
-                    let className = json[l][1].replace('<', '&lt;').replace('>', '&gt;').replace('_', ' ');
-                    let classNameClass = json[l][1].replace('<', '').replace('>', '').replace('_', '-');
+                    let className = json[l][1].replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/_/g, ' ');
+                    let classNameClass = json[l][1].replace(/</g, '').replace(/>/g, '').replace(/_/g, '-');
                     html += `<tr class="line-label-${classNameClass}"><td>${className}:</td><td>${json[l][0]}</td></tr>`;
                 }
                 html += '</table>';
                 e.innerHTML = html;
             });
         }
+    }
+
+    function headerDict2DefList(dict) {
+        let dl = document.createElement('dl');
+        dl.classList.add('uk-margin-small-top', 'uk-margin-small-bottom');
+
+        for (let h in dict) {
+            if (!dict[h]) {
+                continue;
+            }
+            let dt = document.createElement('dt');
+            dt.appendChild(document.createTextNode(h.replace(/_/g, '-') + ':'));
+            let dd = document.createElement('dd');
+            dd.appendChild(document.createTextNode(dict[h]));
+            dl.appendChild(dt);
+            dl.appendChild(dd);
+        }
+
+        return dl;
     }
 
     const queryButton = document.getElementById('query-button');
@@ -92,15 +117,25 @@
         exec: () => { queryButton.click(); }
     });
 
+    let abortController = null;
+
     queryButton.addEventListener('click', e => {
         querySpinner.classList.remove('uk-hidden');
+
+        // TODO: make this work
+        if (abortController !== null) {
+            abortController.abort();
+        }
+        abortController = new AbortController();
+        let signal = abortController.signal;
 
         fetch('{{ url_for('query_mails') }}', {
             method: 'post',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: editor.getValue()
+            body: editor.getValue(),
+            signal: signal
         }).then(response => {
             return response.json();
         }).then(json => {
@@ -109,27 +144,26 @@
             for (let hit in json) {
                 let source = json[hit]['_source'];
 
-                let headers = source['headers'];
-                let dl = document.createElement('dl');
-                for (let h in headers) {
-                    if (!headers[h]) {
-                        continue;
-                    }
-                    let dt = document.createElement('dt');
-                    dt.appendChild(document.createTextNode(h.replace('_', '-') + ':'));
-                    let dd = document.createElement('dd');
-                    dd.appendChild(document.createTextNode(headers[h]));
-                    dl.appendChild(dt);
-                    dl.appendChild(dd);
-                }
-                let headerList = document.createElement('div');
-                headerList.classList.add('header-list');
-                headerList.appendChild(dl);
-                queryResults.appendChild(headerList);
-
                 let grid = document.createElement('div');
-                grid.classList.add('uk-grid', 'uk-grid-large', 'uk-child-width-1-2');
+                grid.classList.add('uk-grid', 'uk-grid-medium', 'uk-child-width-1-2');
                 grid.dataset.ukGrid = null;
+
+                let warcHeaders = document.createElement('div');
+                warcHeaders.classList.add('header-list');
+                warcHeaders.appendChild(headerDict2DefList({
+                    warc_id: json[hit]['_id'],
+                    warc_file: source['warc_file'],
+                    warc_offset: source['warc_offset'],
+                    timestamp: source['@timestamp'],
+                    groupname: source['groupname'],
+                    news_url: source['news_url']
+                }));
+                grid.appendChild(warcHeaders);
+
+                let mailHeaders = document.createElement('div');
+                mailHeaders.classList.add('header-list');
+                mailHeaders.appendChild(headerDict2DefList(source['headers']));
+                grid.appendChild(mailHeaders);
 
                 let plainText = document.createElement('div');
                 plainText.appendChild(document.createElement('pre'));
@@ -164,6 +198,10 @@
 
             querySpinner.classList.add('uk-hidden');
             predictLines();
+
+            abortController = null;
+        }).catch(e => {
+            console.info("Fetch aborted: " + e.message);
         });
     });
 </script>
