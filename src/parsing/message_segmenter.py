@@ -264,7 +264,7 @@ def predict(line_model, input_file, output_json=None):
         output_json_file.close()
 
 
-def predict_raw_email(line_model, email):
+def predict_raw_text(line_model, email):
     pred_seq = MailLinesSequence(email, labeled=False, input_is_raw_text=True)
     return (pred for i, pred in
             enumerate(post_process_labels(pred_seq.mail_lines, line_model.predict_generator(pred_seq)))

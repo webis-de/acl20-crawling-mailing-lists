@@ -3,7 +3,7 @@
 from elasticsearch import Elasticsearch
 from keras import models
 from flask import Flask, jsonify, render_template, request
-from parsing.message_segmenter import predict_raw_email, load_fasttext_model
+from parsing.message_segmenter import predict_raw_text, load_fasttext_model
 
 app = Flask(__name__)
 app.config.from_object('conf.settings')
@@ -29,7 +29,7 @@ def query_mails():
 
 @app.route('/predict-lines', methods=['POST'])
 def predict_lines():
-    predictions = list(predict_raw_email(line_model, request.data.decode('utf-8')))
+    predictions = list(predict_raw_text(line_model, request.data.decode('utf-8')))
     return jsonify(predictions)
 
 
