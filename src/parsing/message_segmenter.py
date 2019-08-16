@@ -6,7 +6,6 @@ from util.util import *
 
 from datetime import datetime
 import fastText
-from glob import glob
 from itertools import chain
 from keras import callbacks, layers, models
 from keras.utils import Sequence
@@ -55,20 +54,20 @@ CONTEXT = 4
 
 @plac.annotations(
     cmd=('Command', 'positional', None, str, None, 'CMD'),
-    model=('Keras model', 'positional', None, str, None, 'K5'),
-    input_file=('Input JSONL file', 'positional', None, str, None, 'JSONL'),
     fasttext_model=('FastText Model', 'positional', None, str, None, 'FASTTEXT_BIN'),
+    keras_model=('Keras HDF5 model', 'positional', None, str, None, 'HDF5'),
+    input_file=('Input JSONL file', 'positional', None, str, None, 'JSONL'),
     output_json=('Output JSONL file', 'option', 'o', str, None, 'OUTPUT'),
     validation_input=('Validation Data JSON', 'option', 'v', str, None, 'JSONL')
 )
-def main(cmd, model, input_file, fasttext_model, output_json=None, validation_input=None):
+def main(cmd, fasttext_model, keras_model, input_file, output_json=None, validation_input=None):
     print('Loading FastText model...')
     load_fasttext_model(fasttext_model)
 
     if cmd == 'train':
-        train_model(input_file, model, validation_input)
+        train_model(input_file, keras_model, validation_input)
     elif cmd == 'predict':
-        line_model = models.load_model(model + '.hdf5')
+        line_model = models.load_model(keras_model)
         line_model._make_predict_function()
         predict(line_model, input_file, output_json)
     else:
@@ -77,7 +76,8 @@ def main(cmd, model, input_file, fasttext_model, output_json=None, validation_in
 
 
 class MailLinesSequence(Sequence):
-    def __init__(self, input_file, labeled=True, batch_size=None, line_shape=(MAX_LEN, INPUT_DIM), raw_mail=False):
+    def __init__(self, input_descriptor, labeled=True, batch_size=None, line_shape=(MAX_LEN, INPUT_DIM),
+                 input_is_raw_text=False, max_lines=None):
         self.labeled = labeled
         self.mail_lines = []
         self.mail_start_index_map = {}
@@ -91,22 +91,22 @@ class MailLinesSequence(Sequence):
         else:
             self.padding_line = [None]
 
-        if not raw_mail:
-            self._load_json(input_file)
+        if not input_is_raw_text:
+            self._load_jsonl(input_descriptor, max_lines)
         else:
-            self._load_raw_mail(input_file)
+            self._load_raw_text(input_descriptor, max_lines)
 
-    def _load_json(self, input_file):
+    def _load_jsonl(self, jsonl_filedesc, max_lines):
         context_padding = self.padding_line * CONTEXT
 
-        for input_line in open(input_file, 'r'):
-            mail_json = json.loads(input_line)
+        for i, json_text in enumerate(jsonl_filedesc):
+            mail_json = json.loads(json_text)
 
             lines = None
             if not self.labeled:
                 lines = [l + '\n' for l in mail_json['text'].split('\n')]
 
-            elif self.labeled and mail_json['annotations']:
+            elif self.labeled and mail_json['labels']:
                 lines = [l for l in label_lines(mail_json)]
 
             # Skip overly long mails (probably just excessive log data)
@@ -118,11 +118,17 @@ class MailLinesSequence(Sequence):
                 self.mail_end_index_map[len(self.mail_lines) + CONTEXT + len(lines)] = mail_json
                 self.mail_lines.extend(context_padding + lines + context_padding)
 
+            if max_lines is not None and i >= max_lines:
+                break
+
         if self.batch_size is None:
             self.batch_size = len(self.mail_lines)
 
-    def _load_raw_mail(self, mail_contents):
-        lines = [l + '\n' for l in mail_contents.split('\n')]
+    def _load_raw_text(self, raw_text, max_lines):
+        if max_lines is not None:
+            lines = [l + '\n' for l in raw_text.split('\n')[:max_lines]]
+        else:
+            lines = [l + '\n' for l in raw_text.split('\n')]
 
         if lines:
             context_padding = self.padding_line * CONTEXT
@@ -238,20 +244,28 @@ def predict(line_model, input_file, output_json=None):
     if output_json:
         output_json_file = open(output_json, 'w')
 
-    for fname in glob(input_file):
-        print('Predicting {}...'.format(fname))
-        to_stdout = output_json is None
-        pred_seq = MailLinesSequence(fname, labeled=False, batch_size=256)
-        predictions = line_model.predict_generator(pred_seq, verbose=(not to_stdout),
-                                                   steps=(None if not to_stdout else 10))
-        export_mail_annotation_spans(predictions, pred_seq, output_json_file, verbose=to_stdout)
+    to_stdout = output_json is None
+
+    print('Predicting {}...'.format(input_file))
+    with open(input_file, 'r') as f:
+        while True:
+            pred_seq = MailLinesSequence(f, labeled=False, batch_size=256, max_lines=1000)
+            if len(pred_seq) == 0:
+                break
+
+            predictions = line_model.predict_generator(
+                pred_seq, verbose=(not to_stdout), steps=(None if not to_stdout else 10))
+            export_mail_annotation_spans(predictions, pred_seq, output_json_file, verbose=to_stdout)
+
+            if output_json_file:
+                output_json_file.flush()
 
     if output_json_file:
         output_json_file.close()
 
 
 def predict_raw_email(line_model, email):
-    pred_seq = MailLinesSequence(email, labeled=False, raw_mail=True)
+    pred_seq = MailLinesSequence(email, labeled=False, input_is_raw_text=True)
     return (pred for i, pred in
             enumerate(post_process_labels(pred_seq.mail_lines, line_model.predict_generator(pred_seq)))
             if CONTEXT <= i < len(pred_seq.mail_lines) - CONTEXT)
@@ -348,7 +362,7 @@ def export_mail_annotation_spans(predictions_softmax, pred_sequence, output_file
             return
 
         d = {k: d[k] for k in d if k != 'id'}
-        d.update({'labels': a, 'annotations': a, 'text': d['text'].lstrip()})
+        d.update({'labels': a, 'text': d['text'].lstrip()})
 
         json.dump(d, output_file)
         output_file.write('\n')
