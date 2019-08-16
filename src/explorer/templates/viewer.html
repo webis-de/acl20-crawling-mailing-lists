@@ -15,7 +15,7 @@
             <h1>Email Corpus Explorer</h1>
 
             <div>
-                <pre id="query-editor">{
+                <div id="query-editor"><textarea rows="25" cols="80">{
     "query": {
         "bool": {
             "filter": [
@@ -38,7 +38,7 @@
         }
     },
     "size": 50
-}</pre>
+}</textarea></div>
             </div>
             <div class="uk-margin">
                 <button type="button" class="uk-button uk-button-primary" id="query-button">Submit</button>
