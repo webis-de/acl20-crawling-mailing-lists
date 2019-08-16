@@ -18,7 +18,7 @@ line_model._make_predict_function()
 
 @app.route('/')
 def index_route():
-    return render_template('viewer.html', page_tpl='index.html')
+    return render_template('index.html', page_tpl='index.html')
 
 
 @app.route('/query-mails', methods=['POST'])
