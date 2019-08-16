@@ -1,4 +1,8 @@
-from util import *
+#!/usr/bin/env python3
+#
+# Draw a sample of messages from an Elasticsearch index.
+
+from util.util import *
 
 from elasticsearch import Elasticsearch
 import email
@@ -10,7 +14,7 @@ from tqdm import tqdm
 from warcio import ArchiveIterator
 
 
-ES = None
+es = None
 
 
 @plac.annotations(
@@ -27,8 +31,8 @@ def main(index, corpus_dir, output_dir=None, output_jsonl=None, output_text=None
          total_mails=10000, group_limit=None, skip=0):
     scroll_size = 2000
 
-    global ES
-    ES = Elasticsearch(['betaweb015'], sniff_on_start=True, sniff_on_connection_fail=True, timeout=60)
+    global es
+    es = Elasticsearch(['betaweb015'], sniff_on_start=True, sniff_on_connection_fail=True, timeout=60)
 
     if output_dir and not os.path.isdir(output_dir):
         os.makedirs(output_dir)
@@ -42,7 +46,7 @@ def main(index, corpus_dir, output_dir=None, output_jsonl=None, output_text=None
         text_file = open(output_text, 'w')
 
     print('Retrieving initial batch...')
-    results = ES.search(index=index, scroll='10m', size=scroll_size, body={
+    results = es.search(index=index, scroll='10m', size=scroll_size, body={
         # "query": {
         #     "bool": {
         #         "filter": {
@@ -103,7 +107,7 @@ def main(index, corpus_dir, output_dir=None, output_jsonl=None, output_text=None
             }
         },
         "size": 100
-})
+    })
 
     if skip > 0:
         print('Skipping ahead {} messages...'.format(skip))
@@ -167,7 +171,7 @@ def main(index, corpus_dir, output_dir=None, output_jsonl=None, output_text=None
                 if num_samples >= total_mails:
                     break
 
-            results = ES.scroll(scroll_id=results['_scroll_id'], scroll='10m')
+            results = es.scroll(scroll_id=results['_scroll_id'], scroll='10m')
 
     if jsonl_file:
         jsonl_file.close()

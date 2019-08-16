@@ -57,6 +57,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.5/mode-json.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.5/theme-chrome.js"></script>
 <script>
+    let abortController = null;
+
     function predictLines() {
         for (let e of document.querySelectorAll('.plaintext-body')) {
             if (e.classList.contains('no-content')) {
@@ -68,7 +70,8 @@
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: e.innerText
+                body: e.innerText,
+                signal: abortController.signal
             }).then(response => {
                 return response.json();
             }).then(json => {
@@ -117,17 +120,13 @@
         exec: () => { queryButton.click(); }
     });
 
-    let abortController = null;
-
     queryButton.addEventListener('click', e => {
         querySpinner.classList.remove('uk-hidden');
 
-        // TODO: make this work
         if (abortController !== null) {
             abortController.abort();
         }
         abortController = new AbortController();
-        let signal = abortController.signal;
 
         fetch('{{ url_for('query_mails') }}', {
             method: 'post',
@@ -135,7 +134,7 @@
                 'Content-Type': 'application/json',
             },
             body: editor.getValue(),
-            signal: signal
+            signal: abortController.signal
         }).then(response => {
             return response.json();
         }).then(json => {
@@ -198,8 +197,6 @@
 
             querySpinner.classList.add('uk-hidden');
             predictLines();
-
-            abortController = null;
         }).catch(e => {
             console.info("Fetch aborted: " + e.message);
         });

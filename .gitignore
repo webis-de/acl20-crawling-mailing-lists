@@ -9,6 +9,7 @@ data
 # Python
 venv
 .venv
+remote
 *.pyc
 __pycache__/
 pip-log.txt

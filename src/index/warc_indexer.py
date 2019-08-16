@@ -1,3 +1,7 @@
+#!/usr/bin/env python3
+#
+# Index WARC files containing email/newsgroup messages to Elasticsearch.
+
 from concurrent.futures import ThreadPoolExecutor
 from elasticsearch import Elasticsearch, helpers
 import email
@@ -15,14 +19,14 @@ import sys
 from time import sleep
 from tqdm import tqdm
 from threading import Thread
-from util import decode_message_part
+from util.util import decode_message_part
 from warcio import ArchiveIterator
 
 
 __SHUTDOWN_FLAG = False
 
-ES = None
-NLP = None
+es = None
+nlp = None
 
 
 @plac.annotations(
@@ -34,11 +38,11 @@ def main(input_dir, index, workers=10):
     signal.signal(signal.SIGTERM, lambda s, f: signal_shutdown())
     signal.signal(signal.SIGINT, lambda s, f: signal_shutdown())
 
-    global ES, NLP
-    ES = Elasticsearch(['betaweb015', 'betaweb017', 'betaweb020'], sniff_on_start=True, sniff_on_connection_fail=True, timeout=360)
+    global es, nlp
+    es = Elasticsearch(['betaweb015', 'betaweb017', 'betaweb020'], sniff_on_start=True, sniff_on_connection_fail=True, timeout=360)
 
-    NLP = spacy.load('en_core_web_sm')
-    NLP.add_pipe(LanguageDetector(), name='language_detector', last=True)
+    nlp = spacy.load('en_core_web_sm')
+    nlp.add_pipe(LanguageDetector(), name='language_detector', last=True)
 
     indexer_thread = Thread(target=start_indexer, args=(input_dir, index, workers))
     indexer_thread.daemon = False
@@ -52,8 +56,8 @@ def main(input_dir, index, workers=10):
 
 
 def start_indexer(input_dir, index, workers):
-    if not ES.indices.exists(index=index):
-        ES.indices.create(index=index, body={
+    if not es.indices.exists(index=index):
+        es.indices.create(index=index, body={
             'settings': {
                 'number_of_replicas': 0,
                 'number_of_shards': 30
@@ -102,7 +106,7 @@ def signal_shutdown():
 
 def index_warc(index, group, filename, queue):
     try:
-        helpers.bulk(ES, generate_message(index, group, filename))
+        helpers.bulk(es, generate_message(index, group, filename))
     except Exception as e:
         print(e, file=sys.stderr)
     finally:
@@ -140,7 +144,7 @@ def generate_message(index, group, filename):
                 mail_date = None
 
             try:
-                lang = NLP(mail_text)._.language['language']
+                lang = nlp(mail_text)._.language['language']
             except Exception as e:
                 lang = 'UNKNOWN'
                 print(e, file=sys.stderr)

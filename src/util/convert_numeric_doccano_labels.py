@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 
+# Converter for numeric Doccano labels to text labels. Needed for re-import into Doccano.
+# Adjust the numeric labels in-code according to your Doccano database.
+
 import json
 import sys
 

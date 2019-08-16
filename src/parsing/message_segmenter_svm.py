@@ -1,3 +1,7 @@
+# This file contains legacy code that is mostly meant as a reproduction study
+# of the 2005 paper "Email Data Cleaning" by Tang et al.
+# For actual message segmentation, use the deep segmenter from message_segmenter.py.
+
 import json
 import numpy as np
 import os

@@ -1,3 +1,7 @@
+#!/usr/bin/env python3
+#
+# Index Doccano JSON annotations to Elasticsearch.
+
 import ast
 from elasticsearch import Elasticsearch, helpers
 from collections import defaultdict
@@ -7,24 +11,24 @@ import spacy
 from spacy_langdetect import LanguageDetector
 from tqdm import tqdm
 
-ES = None
+es = None
+
 
 @plac.annotations(
     input_file=('Input annotation file', 'positional', None, str, None, 'FILE'),
     index=('Output Elasticsearch index', 'positional', None, str, None, 'INDEX')
 )
 def main(input_file, index):
-    global ES, NLP
-    ES = Elasticsearch(['betaweb015'], sniff_on_start=True, sniff_on_connection_fail=True, timeout=60)
-
+    global es
+    es = Elasticsearch(['betaweb015'], sniff_on_start=True, sniff_on_connection_fail=True, timeout=60)
     start_indexer(input_file, index)
 
 
 def start_indexer(input_file, index):
     print('Creating index...')
 
-    if not ES.indices.exists(index=index):
-        ES.indices.create(index=index, body={
+    if not es.indices.exists(index=index):
+        es.indices.create(index=index, body={
             'settings': {
                 'number_of_replicas': 2,
                 'number_of_shards': 5
@@ -71,7 +75,7 @@ def start_indexer(input_file, index):
             }
         })
 
-    helpers.bulk(ES, generate_messages(index, input_file), timeout='240s')
+    helpers.bulk(es, generate_messages(index, input_file), timeout='240s')
 
 
 def generate_messages(index, input_file):

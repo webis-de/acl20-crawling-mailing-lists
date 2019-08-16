@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
+#
+# Deep message segmenter to classify lines of an email or newsgroup message.
 
-from util import *
+from util.util import *
 
 from datetime import datetime
 import fastText
@@ -120,7 +122,6 @@ class MailLinesSequence(Sequence):
             self.batch_size = len(self.mail_lines)
 
     def _load_raw_mail(self, mail_contents):
-        load_fasttext_model('data/email-vectors.bin')
         lines = [l + '\n' for l in mail_contents.split('\n')]
 
         if lines:
@@ -439,6 +440,8 @@ def get_word_vectors(text):
 
 
 def get_word_vector(word):
+    if _model is None:
+        raise RuntimeError("FastText vectors not loaded. Call load_fasttext_model() first.")
     return _model.get_word_vector(word)
 
 
