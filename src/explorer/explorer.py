@@ -24,7 +24,7 @@ def index_route():
 @app.route('/query-mails', methods=['POST'])
 def query_mails():
     query = request.get_json()
-    return jsonify(es.search(index=app.config.get('ES_INDEX'), body=query).get('hits', {}).get('hits'))
+    return jsonify(es.search(index=app.config.get('ES_INDEX'), body=query).get('hits'))
 
 
 @app.route('/predict-lines', methods=['POST'])

@@ -47,6 +47,7 @@
         </div>
 
         <div class="uk-section">
+            <div class="uk-container uk-width-1-1 uk-text-small uk-margin-small-bottom" id="query-results-total"></div>
             <div class="uk-container uk-width-1-1" id="query-results"></div>
         </div>
 
@@ -109,6 +110,7 @@
     const queryButton = document.getElementById('query-button');
     const querySpinner = document.getElementById('query-spinner');
     const queryResults = document.getElementById('query-results');
+    const queryResultsTotal = document.getElementById('query-results-total');
 
     const editor = ace.edit('query-editor');
     let JsonMode = ace.require("ace/mode/json").Mode;
@@ -139,9 +141,11 @@
             return response.json();
         }).then(json => {
             queryResults.innerHTML = '';
+            queryResultsTotal.innerHTML = `<strong>Total results:</strong> ${json['total']}`;
 
-            for (let hit in json) {
-                let source = json[hit]['_source'];
+            let hits = json['hits'];
+            for (let hit in hits) {
+                let source = hits[hit]['_source'];
 
                 let grid = document.createElement('div');
                 grid.classList.add('uk-grid', 'uk-grid-medium', 'uk-child-width-1-2');
@@ -150,7 +154,7 @@
                 let warcHeaders = document.createElement('div');
                 warcHeaders.classList.add('header-list');
                 warcHeaders.appendChild(headerDict2DefList({
-                    warc_id: json[hit]['_id'],
+                    warc_id: hits[hit]['_id'],
                     warc_file: source['warc_file'],
                     warc_offset: source['warc_offset'],
                     timestamp: source['@timestamp'],
