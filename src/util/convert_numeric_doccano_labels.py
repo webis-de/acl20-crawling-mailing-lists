@@ -28,10 +28,11 @@ labels_dict = {
 for document in sys.stdin:
     json_doc = json.loads(document)
 
-    converted_doc = json_doc.copy()
-
     labels = []
-    annotations = json_doc["annotations"]
+    annotations = list(json_doc["annotations"])
+
+    converted_doc = dict(json_doc)
+    del converted_doc['annotations']
 
     for annotation in annotations:
         annotation["label"] = labels_dict[annotation["label"]]
