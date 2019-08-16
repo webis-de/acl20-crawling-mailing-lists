@@ -218,11 +218,11 @@ def train_model(input_file, output_model, validation_input=None):
     concat = layers.concatenate([line_model_cur, line_model_prev, context_model])
     dropout = layers.Dropout(0.25)(concat)
     dense_2 = layers.Dense(OUTPUT_DIM)(dropout)
-    softmax = layers.Activation('softmax')(dense_2)
+    output = layers.Activation('softmax')(dense_2)
 
-    line_model = models.Model(inputs=[line_input_cur, line_input_prev, context_input], outputs=softmax)
-    line_model.compile(optimizer='adam', loss='categorical_crossentropy',
-                       metrics=['categorical_accuracy', 'mean_squared_error'])
+    line_model = models.Model(inputs=[line_input_cur, line_input_prev, context_input], outputs=output)
+    line_model.compile(optimizer='adam', loss='categorical_hinge',
+                       metrics=['categorical_accuracy'])
     line_model.summary()
 
     train_seq = MailLinesSequence(input_file, labeled=True, batch_size=BATCH_SIZE)

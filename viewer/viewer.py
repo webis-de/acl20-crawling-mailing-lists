@@ -8,7 +8,7 @@ app = Flask(__name__)
 app.config.from_object('local_settings')
 
 es = Elasticsearch(['betaweb015', 'betaweb020'], sniff_on_start=True, sniff_on_connection_fail=True, timeout=140)
-line_model = models.load_model('data/line_model_2k_11.epoch-05.loss-0.44.hdf5')
+line_model = models.load_model('data/line_model_2k_hinge2.epoch-14.loss-0.21.hdf5')
 line_model._make_predict_function()
 
 lock = Lock()
