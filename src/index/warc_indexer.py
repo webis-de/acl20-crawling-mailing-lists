@@ -25,7 +25,7 @@ from warcio import ArchiveIterator
 )
 def main(input_dir, index):
     conf = pyspark.SparkConf()
-    conf.setMaster('yarn')
+    conf.setMaster('local[*]')
     conf.setAppName('Mail WARC Indexer')
     sc = pyspark.SparkContext(conf=conf)
     sc.setJobDescription('Mail WARC Indexer for {}'.format(input_dir))
@@ -39,9 +39,6 @@ def get_es_client():
 
 
 def start_indexer(input_dir, index, spark_context):
-    nlp = spacy.load('en_core_web_sm')
-    nlp.add_pipe(LanguageDetector(), name='language_detector', last=True)
-
     es = get_es_client()
     if not es.indices.exists(index=index):
         es.indices.create(index=index, body={
@@ -69,19 +66,23 @@ def start_indexer(input_dir, index, spark_context):
     counter = spark_context.accumulator(0)
 
     print("Listing group directories...", file=sys.stderr)
-    group_dirs = spark_context.parallelize(glob(os.path.join(input_dir, 'gmane.*')))
+    group_dirs = glob(os.path.join(input_dir, 'gmane.*'))
+    group_dirs = spark_context.parallelize(group_dirs, len(group_dirs) // 5)
 
     print('Listing WARCS...', file=sys.stderr)
     warcs = group_dirs.flatMap(lambda d: glob(os.path.join(d, '*.warc.gz')))
     warcs.cache()
 
     print('Indexing messages...', file=sys.stderr)
-    warcs.foreach(partial(index_warc, index=index, nlp=nlp, counter=counter))
+    warcs.foreach(partial(index_warc, index=index, counter=counter))
 
 
-def index_warc(filename, index, nlp, counter):
+def index_warc(filename, index, counter):
     try:
-        helpers.bulk(get_es_client(), generate_message(index, filename, nlp, counter))
+        nlp = spacy.load('en_core_web_sm')
+        nlp.add_pipe(LanguageDetector(), name='language_detector', last=True)
+        list(generate_message(index, filename, nlp, counter))
+        # helpers.bulk(get_es_client(), generate_message(index, filename, nlp, counter))
     except Exception as e:
         print(e, file=sys.stderr)
 
