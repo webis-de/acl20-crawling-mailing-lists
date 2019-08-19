@@ -75,7 +75,7 @@ def main(cmd, fasttext_model, keras_model, input_file, output_json=None, validat
 
 
 class MailLinesSequence(Sequence):
-    def __init__(self, input_descriptor, labeled=True, batch_size=None, line_shape=(MAX_LEN, INPUT_DIM),
+    def __init__(self, input_file, labeled=True, batch_size=None, line_shape=(MAX_LEN, INPUT_DIM),
                  input_is_raw_text=False, max_lines=None):
         self.labeled = labeled
         self.mail_lines = []
@@ -91,14 +91,17 @@ class MailLinesSequence(Sequence):
             self.padding_line = [None]
 
         if not input_is_raw_text:
-            self._load_jsonl(input_descriptor, max_lines)
+            if type(input_file) is str:
+                self._load_jsonl(open(input_file, 'r'), max_lines)
+            else:
+                self._load_jsonl(input_file, max_lines)
         else:
-            self._load_raw_text(input_descriptor, max_lines)
+            self._load_raw_text(input_file, max_lines)
 
-    def _load_jsonl(self, jsonl_filedesc, max_lines):
+    def _load_jsonl(self, json_file, max_lines):
         context_padding = self.padding_line * CONTEXT
 
-        for i, json_text in enumerate(jsonl_filedesc):
+        for i, json_text in enumerate(json_file):
             mail_json = json.loads(json_text)
 
             lines = None
@@ -199,10 +202,10 @@ def train_model(input_file, output_model, validation_input=None):
     def get_base_line_model():
         line_input = layers.Input(shape=(MAX_LEN, INPUT_DIM))
         masking = layers.Masking(0)(line_input)
-        bi_gru = layers.Bidirectional(layers.GRU(128), merge_mode='sum')(masking)
-        bi_gru = layers.BatchNormalization()(bi_gru)
-        bi_gru = layers.Activation('relu')(bi_gru)
-        return line_input, bi_gru
+        bi_seq = layers.Bidirectional(layers.GRU(128), merge_mode='sum')(masking)
+        bi_seq = layers.BatchNormalization()(bi_seq)
+        bi_seq = layers.Activation('relu')(bi_seq)
+        return line_input, bi_seq
 
     def get_context_model():
         context_input = layers.Input(shape=(CONTEXT * 2 + 1, MAX_LEN, INPUT_DIM))
