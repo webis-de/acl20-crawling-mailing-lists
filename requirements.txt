@@ -1,8 +1,7 @@
 elasticsearch
 flask
 fasttextmirror
-keras
-keras_self_attention
+keras-preprocessing
 numpy
 plac
 pytz
@@ -12,6 +11,6 @@ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-2.1.0
 scikit-learn
 scipy
 setuptools
-tensorflow
+tensorflow>=2.0.0b1
 tqdm
 warcio

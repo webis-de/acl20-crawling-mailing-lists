@@ -7,8 +7,8 @@ from util.util import *
 from datetime import datetime
 import fastText
 from itertools import chain
-from keras import callbacks, layers, models
-from keras.utils import Sequence
+from tensorflow.python.keras import callbacks, layers, models
+from tensorflow.python.keras.utils import Sequence
 import numpy as np
 import json
 import plac
@@ -68,7 +68,6 @@ def main(cmd, fasttext_model, keras_model, input_file, output_json=None, validat
         train_model(input_file, keras_model, validation_input)
     elif cmd == 'predict':
         line_model = models.load_model(keras_model)
-        line_model._make_predict_function()
         predict(line_model, input_file, output_json)
     else:
         print('Invalid command.', file=sys.stderr)

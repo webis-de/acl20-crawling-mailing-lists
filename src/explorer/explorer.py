@@ -1,7 +1,7 @@
 # Dataset explorer web application.
 
 from elasticsearch import Elasticsearch
-from keras import models
+from tensorflow.python.keras import models
 from flask import Flask, jsonify, render_template, request
 from parsing.message_segmenter import predict_raw_text, load_fasttext_model
 
@@ -13,7 +13,6 @@ es = Elasticsearch(app.config.get('ES_SEED_HOSTS'), sniff_on_start=True,
                    sniff_on_connection_fail=True, timeout=140)
 load_fasttext_model(app.config.get('FASTTEXT_MODEL'))
 line_model = models.load_model(app.config.get('SEGMENTER_MODEL'))
-line_model._make_predict_function()
 
 
 @app.route('/')
