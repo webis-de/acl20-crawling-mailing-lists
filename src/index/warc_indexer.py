@@ -2,60 +2,47 @@
 #
 # Index WARC files containing email/newsgroup messages to Elasticsearch.
 
-from concurrent.futures import ThreadPoolExecutor
 from elasticsearch import Elasticsearch, helpers
 import email
 import email.utils
 from glob import glob
-import signal
-from multiprocessing import Queue
+from functools import partial
 import plac
 import pytz
 import os
+import pyspark
 import re
 import spacy
 from spacy_langdetect import LanguageDetector
 import sys
-from time import sleep
-from tqdm import tqdm
-from threading import Thread
 from util.util import decode_message_part
 from warcio import ArchiveIterator
 
 
-__SHUTDOWN_FLAG = False
-
-es = None
-nlp = None
-
-
 @plac.annotations(
     input_dir=('Input directory containing newsgroup directories', 'positional', None, str, None, 'DIR'),
-    index=('Output Elasticsearch index', 'positional', None, str, None, 'INDEX'),
-    workers=('Number of Workers', 'option', 'w', int, None, 'NUM'),
+    index=('Output Elasticsearch index', 'positional', None, str, None, 'INDEX')
 )
-def main(input_dir, index, workers=10):
-    signal.signal(signal.SIGTERM, lambda s, f: signal_shutdown())
-    signal.signal(signal.SIGINT, lambda s, f: signal_shutdown())
+def main(input_dir, index):
+    conf = pyspark.SparkConf()
+    conf.setMaster('yarn')
+    conf.setAppName('Mail WARC Indexer')
+    sc = pyspark.SparkContext(conf=conf)
+    sc.setJobDescription('Mail WARC Indexer for {}'.format(input_dir))
 
-    global es, nlp
-    es = Elasticsearch(['betaweb015', 'betaweb017', 'betaweb020'], sniff_on_start=True, sniff_on_connection_fail=True, timeout=360)
+    start_indexer(input_dir, index, sc)
 
+
+def get_es_client():
+    return Elasticsearch(['betaweb015', 'betaweb017', 'betaweb020'],
+                         sniff_on_start=True, sniff_on_connection_fail=True, timeout=360)
+
+
+def start_indexer(input_dir, index, spark_context):
     nlp = spacy.load('en_core_web_sm')
     nlp.add_pipe(LanguageDetector(), name='language_detector', last=True)
 
-    indexer_thread = Thread(target=start_indexer, args=(input_dir, index, workers))
-    indexer_thread.daemon = False
-    indexer_thread.start()
-
-    # Keep main thread responsive to catch signals
-    while not __SHUTDOWN_FLAG:
-        sleep(0.1)
-
-    indexer_thread.join()
-
-
-def start_indexer(input_dir, index, workers):
+    es = get_es_client()
     if not es.indices.exists(index=index):
         es.indices.create(index=index, body={
             'settings': {
@@ -79,43 +66,27 @@ def start_indexer(input_dir, index, workers):
             }
         })
 
-    print("Listing groups...", file=sys.stderr)
-    newsgroups = [os.path.basename(d) for d in glob(os.path.join(input_dir, 'gmane.*'))]
+    counter = spark_context.accumulator(0)
 
-    print("Indexing group meta data...", file=sys.stderr)
-    queue = Queue(maxsize=workers)
-    with ThreadPoolExecutor(max_workers=workers) as e:
-        with tqdm(desc='Index progress', total=len(newsgroups), unit=' groups') as progress_bar:
-            for group in newsgroups:
-                for filename in glob(os.path.join(input_dir, group, '*.warc.gz')):
-                    if __SHUTDOWN_FLAG:
-                        return
+    print("Listing group directories...", file=sys.stderr)
+    group_dirs = spark_context.parallelize(glob(os.path.join(input_dir, 'gmane.*')))
 
-                    queue.put(None)
-                    e.submit(index_warc, index, group, filename, queue)
+    print('Listing WARCS...', file=sys.stderr)
+    warcs = group_dirs.flatMap(lambda d: glob(os.path.join(d, '*.warc.gz')))
+    warcs.cache()
 
-                progress_bar.update()
-
-            progress_bar.update(progress_bar.total - progress_bar.n)
+    print('Indexing messages...', file=sys.stderr)
+    warcs.foreach(partial(index_warc, index=index, nlp=nlp, counter=counter))
 
 
-def signal_shutdown():
-    global __SHUTDOWN_FLAG
-    __SHUTDOWN_FLAG = True
-
-
-def index_warc(index, group, filename, queue):
+def index_warc(filename, index, nlp, counter):
     try:
-        helpers.bulk(es, generate_message(index, group, filename))
+        helpers.bulk(get_es_client(), generate_message(index, filename, nlp, counter))
     except Exception as e:
         print(e, file=sys.stderr)
-    finally:
-        queue.get()
 
 
-def generate_message(index, group, filename):
-    global __SHUTDOWN_FLAG
-
+def generate_message(index, filename, nlp, counter):
     email_regex = re.compile(r'([a-zA-Z0-9_\-./+]+)@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.)|' +
                              r'(([a-zA-Z0-9\-]+\.)+))([a-zA-Z]{2,}|[0-9]{1,3})(\]?)')
 
@@ -149,13 +120,15 @@ def generate_message(index, group, filename):
                 lang = 'UNKNOWN'
                 print(e, file=sys.stderr)
 
+            counter.add(1)
+
             yield {
                 '_index': index,
                 '_type': 'message',
                 '_id': warc_headers.get_header('WARC-Record-ID'),
                 '_source': {
                     '@timestamp': mail_date,
-                    'groupname': group,
+                    'groupname': os.path.basename(os.path.dirname(filename)),
                     'warc_file': os.path.join(os.path.basename(os.path.dirname(filename)),
                                               os.path.basename(filename)),
                     'warc_offset': iterator.offset,
@@ -175,9 +148,6 @@ def generate_message(index, group, filename):
                     'text_html': mail_html
                 }
             }
-
-            if __SHUTDOWN_FLAG:
-                return
 
 
 if __name__ == '__main__':
