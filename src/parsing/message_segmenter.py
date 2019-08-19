@@ -61,7 +61,7 @@ CONTEXT = 4
     validation_input=('Validation Data JSON', 'option', 'v', str, None, 'JSONL')
 )
 def main(cmd, fasttext_model, keras_model, input_file, output_json=None, validation_input=None):
-    print('Loading FastText model...')
+    print('Loading FastText model...', file=sys.stderr)
     load_fasttext_model(fasttext_model)
 
     if cmd == 'train':
@@ -248,7 +248,7 @@ def predict(line_model, input_file, output_json=None):
 
     to_stdout = output_json is None
 
-    print('Predicting {}...'.format(input_file))
+    print('Predicting {}...'.format(input_file), file=sys.stderr)
     with open(input_file, 'r') as f:
         while True:
             pred_seq = MailLinesSequence(f, labeled=False, batch_size=256, max_lines=1000)
