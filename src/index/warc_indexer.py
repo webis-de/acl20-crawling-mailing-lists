@@ -115,7 +115,7 @@ def generate_message(index, filename, nlp, counter):
                 mail_date = None
 
             try:
-                lang = nlp(mail_text)._.language['language']
+                lang = nlp(mail_text[:nlp.max_length])._.language['language']
             except Exception as e:
                 lang = 'UNKNOWN'
                 print(e, file=sys.stderr)
