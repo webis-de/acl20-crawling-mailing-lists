@@ -81,8 +81,7 @@ def index_warc(filename, index, counter):
     try:
         nlp = spacy.load('en_core_web_sm')
         nlp.add_pipe(LanguageDetector(), name='language_detector', last=True)
-        list(generate_message(index, filename, nlp, counter))
-        # helpers.bulk(get_es_client(), generate_message(index, filename, nlp, counter))
+        helpers.bulk(get_es_client(), generate_message(index, filename, nlp, counter))
     except Exception as e:
         print(e, file=sys.stderr)
 
