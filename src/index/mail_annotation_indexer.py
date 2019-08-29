@@ -130,6 +130,10 @@ def generate_docs(batch, index, model=None, nlp=None):
 
             raw_text = doc.get('_source', {}).get('text_plain', '') if not json_input else doc.get('text', '')
 
+            # Skip overly long texts to avoid running out of memory
+            if len(raw_text) > 500000:
+                continue
+
             if model:
                 lines = list(predict_raw_text(model, raw_text))
                 labels = []
@@ -179,7 +183,7 @@ def generate_docs(batch, index, model=None, nlp=None):
 
             output_doc['label_stats'] = dict(stats)
 
-            # improve language prediction by making use of content segmentation
+            # Improve language prediction by making use of content segmentation
             if len(message_text) > 15:
                 output_doc['lang'] = nlp(message_text)._.language['language']
 
