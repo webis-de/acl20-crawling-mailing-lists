@@ -131,7 +131,7 @@ def generate_docs(batch, index, model=None, nlp=None):
             raw_text = doc.get('_source', {}).get('text_plain', '') if not json_input else doc.get('text', '')
 
             # Skip overly long texts to avoid running out of memory
-            if len(raw_text) > 500000:
+            if len(raw_text) > 70000:
                 continue
 
             if model:
