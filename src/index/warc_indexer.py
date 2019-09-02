@@ -128,8 +128,10 @@ def generate_message(index, filename, nlp, counter):
                 '_type': 'message',
                 '_id': doc_id,
                 '_op_type': 'update',
-                'doc': {},              # empty update to retain existing documents
-                'upsert': {             # upsert if document does not exist
+                'script': {
+                    'source': 'ctx.noop = true'     # if document exists, do nothing
+                },
+                'upsert': {                         # upsert if document does not exist
                     '@timestamp': mail_date,
                     'groupname': os.path.basename(os.path.dirname(filename)),
                     'warc_file': os.path.join(os.path.basename(os.path.dirname(filename)),
