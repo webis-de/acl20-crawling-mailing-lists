@@ -129,7 +129,7 @@ def generate_message(index, filename, nlp, counter):
                 '_id': doc_id,
                 '_op_type': 'update',
                 'script': {
-                    'source': 'ctx.noop = true'     # if document exists, do nothing
+                    'source': 'ctx.op = "none"'     # if document exists, do nothing
                 },
                 'upsert': {                         # upsert if document does not exist
                     '@timestamp': mail_date,
