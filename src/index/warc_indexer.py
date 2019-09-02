@@ -90,12 +90,17 @@ def generate_message(index, filename, nlp, counter):
     email_regex = re.compile(r'([a-zA-Z0-9_\-./+]+)@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.)|' +
                              r'(([a-zA-Z0-9\-]+\.)+))([a-zA-Z]{2,}|[0-9]{1,3})(\]?)')
 
+    es = get_es_client()
     with open(filename, 'rb') as f:
         iterator = ArchiveIterator(f)
         for record in iterator:
             warc_headers = record.rec_headers
             body = record.content_stream().read()
             mail = email.message_from_bytes(body)
+            doc_id = warc_headers.get_header('WARC-Record-ID')
+
+            if es.exists(index, doc_id, _source=False):
+                continue
 
             mail_text = '\n'.join(decode_message_part(p) for p in mail.walk()
                                   if p.get_content_type() == 'text/plain').strip()
@@ -125,7 +130,7 @@ def generate_message(index, filename, nlp, counter):
             yield {
                 '_index': index,
                 '_type': 'message',
-                '_id': warc_headers.get_header('WARC-Record-ID'),
+                '_id': doc_id,
                 '_source': {
                     '@timestamp': mail_date,
                     'groupname': os.path.basename(os.path.dirname(filename)),
