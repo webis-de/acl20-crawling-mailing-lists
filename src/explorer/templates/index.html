@@ -60,6 +60,31 @@
 <script>
     let abortController = null;
 
+    function reformatMail(event) {
+        event.preventDefault();
+
+        let textElement = event.target.parentElement.querySelector('.plaintext-body');
+        event.target.parentElement.removeChild(event.target);
+        let text = textElement.dataset.originalText;
+        if (!text) {
+            return;
+        }
+
+        fetch('{{ url_for('reformat_mail') }}', {
+            method: 'post',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: text,
+            signal: abortController.signal,
+            importance: 'high'
+        }).then(response => {
+            return response.json();
+        }).then(json => {
+            console.log(json);
+        });
+    }
+
     function predictLines() {
         for (let e of document.querySelectorAll('.plaintext-body')) {
             if (e.classList.contains('no-content')) {
@@ -72,7 +97,8 @@
                     'Content-Type': 'application/json',
                 },
                 body: e.innerText,
-                signal: abortController.signal
+                signal: abortController.signal,
+                importance: 'low'
             }).then(response => {
                 return response.json();
             }).then(json => {
@@ -84,6 +110,12 @@
                 }
                 html += '</table>';
                 e.innerHTML = html;
+
+                let reformatButton = document.createElement('button');
+                reformatButton.innerText = 'Reformat';
+                reformatButton.classList.add('uk-button', 'uk-button-default');
+                reformatButton.addEventListener('click', reformatMail);
+                e.parentElement.prepend(reformatButton);
             });
         }
     }
@@ -174,6 +206,7 @@
 
                 if (source['text_plain'].trim()) {
                     plainText.firstChild.innerText = source['text_plain'];
+                    plainText.firstChild.dataset.originalText = source['text_plain'];
                 } else {
                     plainText.appendChild(document.createTextNode('<no plaintext content>'));
                     plainText.classList.add('no-content');

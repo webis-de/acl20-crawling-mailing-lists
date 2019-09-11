@@ -11,6 +11,7 @@ from tensorflow.python.keras import callbacks, layers, models
 from tensorflow.python.keras.utils import Sequence
 import numpy as np
 import json
+import os
 import plac
 import sys
 
@@ -271,6 +272,70 @@ def predict_raw_text(line_model, email):
     return (pred for i, pred in
             enumerate(post_process_labels(pred_seq.mail_lines, line_model.predict_generator(pred_seq)))
             if CONTEXT <= i < len(pred_seq.mail_lines) - CONTEXT)
+
+
+def reformat_raw_text_recursive(line_model, email, exclude_classes=None, max_depth=10):
+    """
+    Predicts and recursively reformats an email.
+    Nested quotations will be parsed, quotation markers and symbols are removed and
+    the contents are predicted again.
+
+    :param line_model: input model
+    :param email: input email
+    :param exclude_classes: exclude classes (default: signatures, technical, and patch)
+    :param max_depth: maximum recursion depth
+    :return: nested line predictions
+    """
+
+    if exclude_classes is None:
+        exclude_classes = ['personal_signature', 'mua_signature', 'technical', 'patch']
+
+    def parse_quotation(lines):
+        prefix = os.path.commonprefix([l for l in lines if l.lstrip().startswith('>') or l.lstrip().startswith('|')])
+        text = ''
+        for l in lines:
+            text += re.sub(r'^{}\s*'.format(prefix), '', l.rstrip()) + '\n'
+        return text
+
+    def split_marker(lines):
+        marker = []
+        if lines and lines[-1][1] == 'quotation_marker':
+            marker = [(re.sub(r'^[>|]+\s*', '', lines[-1][0].rstrip()) + '\n', lines[-1][1])]
+            del lines[-1]
+        return marker
+
+    def recursion(text, depth=0):
+        if depth == max_depth:
+            return predict_raw_text(line_model, text)
+
+        predictions = predict_raw_text(line_model, text)
+        lines = []
+        quotation_lines = []
+        for line, cls in predictions:
+            if cls in exclude_classes:
+                continue
+
+            if cls == 'quotation':
+                quotation_lines.append(line)
+                continue
+
+            if cls == 'quotation_marker':
+                line = re.sub(r'^[>|]+\s*', '', line.rstrip()) + '\n'
+
+            if quotation_lines:
+                marker = split_marker(lines)
+                lines.append(marker + recursion(parse_quotation(quotation_lines), depth + 1))
+                quotation_lines.clear()
+
+            lines.append((line, cls))
+
+        if quotation_lines:
+            marker = split_marker(lines)
+            lines.append(marker + recursion(parse_quotation(quotation_lines), depth + 1))
+
+        return lines
+
+    return recursion(email)
 
 
 def post_process_labels(lines, labels_softmax):

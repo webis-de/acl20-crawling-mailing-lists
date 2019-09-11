@@ -3,7 +3,7 @@
 from elasticsearch import Elasticsearch
 from tensorflow.python.keras import models
 from flask import Flask, jsonify, render_template, request
-from parsing.message_segmenter import predict_raw_text, load_fasttext_model
+from parsing.message_segmenter import predict_raw_text, load_fasttext_model, reformat_raw_text_recursive
 
 app = Flask(__name__)
 app.config.from_object('conf.settings')
@@ -29,6 +29,12 @@ def query_mails():
 @app.route('/predict-lines', methods=['POST'])
 def predict_lines():
     predictions = list(predict_raw_text(line_model, request.data.decode('utf-8')))
+    return jsonify(predictions)
+
+
+@app.route('/reformat-mail', methods=['POST'])
+def reformat_mail():
+    predictions = list(reformat_raw_text_recursive(line_model, request.data.decode('utf-8')))
     return jsonify(predictions)
 
 
