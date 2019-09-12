@@ -282,32 +282,56 @@ def reformat_raw_text_recursive(line_model, email, exclude_classes=None, max_dep
 
     :param line_model: input model
     :param email: input email
-    :param exclude_classes: exclude classes (default: signatures, technical, and patch)
+    :param exclude_classes: exclude classes (default: signatures and technical)
     :param max_depth: maximum recursion depth
     :return: nested line predictions
     """
 
     if exclude_classes is None:
-        exclude_classes = ['personal_signature', 'mua_signature', 'technical', 'patch']
+        exclude_classes = ['personal_signature', 'mua_signature', 'technical']
 
     def parse_quotation(lines):
         prefix = os.path.commonprefix([l for l in lines if l.lstrip().startswith('>') or l.lstrip().startswith('|')])
+        prefix = prefix.replace('\n', '')
         text = ''
         for l in lines:
-            text += re.sub(r'^{}\s*'.format(prefix), '', l.rstrip()) + '\n'
-        return text
+            text += re.sub(r'^\s*{}'.format(re.escape(prefix)), '', l.rstrip()).lstrip() + '\n'
+        return text.strip() + '\n'
 
-    def split_marker(lines):
-        marker = []
-        if lines and lines[-1][1] == 'quotation_marker':
-            marker = [(re.sub(r'^[>|]+\s*', '', lines[-1][0].rstrip()) + '\n', lines[-1][1])]
-            del lines[-1]
-        return marker
+    def nest_quotation_markers(lines):
+        nested = []
+        for l in lines:
+            if nested and type(l) is list and type(nested[-1]) is tuple and nested[-1][1] == 'quotation_marker':
+                nested[-1] = [(re.sub(r'^[>|]+\s*', '', nested[-1][0].rstrip() + '\n'), nested[-1][1])] + l
+            else:
+                nested.append(l)
+        return nested
 
-    def recursion(text, depth=0):
-        if depth == max_depth:
-            return predict_raw_text(line_model, text)
+    def strip_empty_boundaries(lines):
+        stripped = []
+        for i, l in enumerate(lines):
+            if type(l) is tuple and l[1] == '<empty>' and i < len(lines) - 1:
+                for l2 in lines[i + 1:]:
+                    if type(l2) is tuple and l2[1] != '<empty>':
+                        stripped.append(l)
+                        break
+            elif type(l) is not tuple or l[1] != '<empty>':
+                stripped.append(l)
+        return stripped
 
+    def combine_lines(lines, classes_collapse_newline):
+        combined = []
+        for l in lines:
+            if combined and type(l) is tuple and type(combined[-1]) is tuple and l[1] == combined[-1][1]:
+                if l[0].strip() == '':
+                    continue
+                delim = ' ' if l[1] in classes_collapse_newline else '\n'
+                combined[-1] = (combined[-1][0].rstrip() + delim + l[0], l[1])
+            else:
+                combined.append(l)
+        return combined
+
+    def recurse(text, depth=0):
         predictions = predict_raw_text(line_model, text)
         lines = []
         quotation_lines = []
@@ -315,27 +339,34 @@ def reformat_raw_text_recursive(line_model, email, exclude_classes=None, max_dep
             if cls in exclude_classes:
                 continue
 
-            if cls == 'quotation':
+            if cls == 'quotation' and depth < max_depth:
                 quotation_lines.append(line)
                 continue
 
-            if cls == 'quotation_marker':
-                line = re.sub(r'^[>|]+\s*', '', line.rstrip()) + '\n'
-
             if quotation_lines:
-                marker = split_marker(lines)
-                lines.append(marker + recursion(parse_quotation(quotation_lines), depth + 1))
+                quot = parse_quotation(quotation_lines)
+                if quot.strip():
+                    rec = recurse(quot, depth + 1)
+                    if rec:
+                        lines.append(rec)
                 quotation_lines.clear()
 
             lines.append((line, cls))
 
-        if quotation_lines:
-            marker = split_marker(lines)
-            lines.append(marker + recursion(parse_quotation(quotation_lines), depth + 1))
+        if quotation_lines and depth < max_depth:
+            quot = parse_quotation(quotation_lines)
+            if quot.strip():
+                rec = recurse(quot, depth + 1)
+                if rec:
+                    lines.append(rec)
 
+        lines = combine_lines(lines, ['quotation_marker', 'closing'])
+        lines = strip_empty_boundaries(lines)
+        lines = nest_quotation_markers(lines)
+        lines = strip_empty_boundaries(lines)
         return lines
 
-    return recursion(email)
+    return recurse(email)
 
 
 def post_process_labels(lines, labels_softmax):

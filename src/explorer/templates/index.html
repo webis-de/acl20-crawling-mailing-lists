@@ -60,11 +60,38 @@
 <script>
     let abortController = null;
 
+    function labelLines(targetElement, lines) {
+        let table = document.createElement('table');
+        table.classList.add('labeled-lines');
+        for (let l in lines) {
+            let tr = document.createElement('tr');
+            let tdCls = document.createElement('td');
+            let tdBody = document.createElement('td');
+
+            if (lines[l][0] instanceof Array) {
+                labelLines(tdBody, lines[l]);
+            } else {
+                let className = lines[l][1].replace(/_/g, ' ');
+                let classNameClass = lines[l][1].replace(/</g, '').replace(/>/g, '').replace(/_/g, '-');
+
+                tr.classList.add(`line-label-${classNameClass}`);
+                tdCls.appendChild(document.createTextNode(className));
+                tdBody.appendChild(document.createTextNode(lines[l][0]));
+            }
+            tr.appendChild(tdCls);
+            tr.appendChild(tdBody);
+            table.appendChild(tr);
+        }
+        targetElement.innerHTML = '';
+        targetElement.appendChild(table);
+    }
+
     function reformatMail(event) {
         event.preventDefault();
 
         let textElement = event.target.parentElement.querySelector('.plaintext-body');
-        event.target.parentElement.removeChild(event.target);
+        event.target.innerText = 'Loading...';
+        event.target.setAttribute('disabled', '');
         let text = textElement.dataset.originalText;
         if (!text) {
             return;
@@ -81,7 +108,8 @@
         }).then(response => {
             return response.json();
         }).then(json => {
-            console.log(json);
+            labelLines(textElement, json);
+            event.target.parentElement.removeChild(event.target);
         });
     }
 
@@ -102,14 +130,7 @@
             }).then(response => {
                 return response.json();
             }).then(json => {
-                let html = '<table class="labeled-lines">';
-                for (let l in json) {
-                    let className = json[l][1].replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/_/g, ' ');
-                    let classNameClass = json[l][1].replace(/</g, '').replace(/>/g, '').replace(/_/g, '-');
-                    html += `<tr class="line-label-${classNameClass}"><td>${className}:</td><td>${json[l][0]}</td></tr>`;
-                }
-                html += '</table>';
-                e.innerHTML = html;
+                labelLines(e, json);
 
                 let reformatButton = document.createElement('button');
                 reformatButton.innerText = 'Reformat';

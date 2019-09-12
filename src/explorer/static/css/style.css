@@ -25,10 +25,24 @@
     clear: left;
 }
 
+.labeled-lines {
+    border: 2px solid transparent;
+    padding: .5rem;
+}
+
+.labeled-lines .labeled-lines {
+    border-left-color: rgb(125, 195, 216);
+}
+
+.labeled-lines:hover {
+    border-color: rgb(125, 195, 216);
+}
+
 .labeled-lines td:first-child {
     font-weight: bold;
     text-align: right;
     padding: 0 1em 0 0;
+    vertical-align: top;
 }
 
 .labeled-lines td:last-child {
