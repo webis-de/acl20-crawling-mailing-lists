@@ -7,6 +7,7 @@ from parsing.message_segmenter import load_fasttext_model, predict_raw_text
 
 from elasticsearch import Elasticsearch, helpers
 from collections import defaultdict
+import itertools
 import json
 import plac
 import spacy
@@ -104,7 +105,13 @@ def start_indexer(index, model, fasttext_model, input_file):
 
         with tqdm(desc='Annotating and indexing batches', unit=' batches', total=float("inf")) as progress:
             while results['hits']['hits']:
-                helpers.bulk(es, generate_docs(results['hits']['hits'], index, model, nlp))
+                doc_gen = generate_docs(results['hits']['hits'], index, model, nlp)
+                try:
+                    # only start bulk request if generator has at least one element
+                    peek = next(doc_gen)
+                    helpers.bulk(es, itertools.chain([peek], doc_gen))
+                except StopIteration:
+                    pass
                 progress.update(1)
                 results = es.scroll(scroll_id=results['_scroll_id'], scroll='60m')
 
@@ -116,12 +123,13 @@ def start_indexer(index, model, fasttext_model, input_file):
 def generate_docs(batch, index, model=None, nlp=None):
     json_input = not model
 
-    with tqdm(desc='Preparing documents in batch', unit='docs', total=len(batch)) as progress:
+    with tqdm(desc='Preparing documents in batch', unit='docs', total=len(batch), leave=False) as progress:
         for doc in batch:
             doc_id = doc['_id'] if not json_input else doc.get('meta', {}).get('warc_id')
 
             if not doc_id:
-                return
+                progress.update(1)
+                continue
 
             output_doc = {}
 
@@ -132,6 +140,7 @@ def generate_docs(batch, index, model=None, nlp=None):
 
             # Skip overly long texts to avoid running out of memory
             if len(raw_text) > 70000:
+                progress.update(1)
                 continue
 
             if model:
