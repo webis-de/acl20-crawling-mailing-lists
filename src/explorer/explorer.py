@@ -2,8 +2,9 @@
 
 from elasticsearch import Elasticsearch
 from tensorflow.python.keras import models
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, abort, jsonify, render_template, request
 from parsing.message_segmenter import predict_raw_text, load_fasttext_model, reformat_raw_text_recursive
+import util.util as util
 
 app = Flask(__name__)
 app.config.from_object('conf.settings')
@@ -36,6 +37,13 @@ def predict_lines():
 def reformat_mail():
     predictions = list(reformat_raw_text_recursive(line_model, request.data.decode('utf-8')))
     return jsonify(predictions)
+
+
+@app.route('/get-thread', methods=['GET'])
+def get_thread():
+    if not request.args.get('message_id'):
+        abort(400, 'Missing message_id')
+    return jsonify(util.retrieve_email_thread(es, app.config.get('ES_INDEX'), request.args.get('message_id')))
 
 
 if __name__ == '__main__':

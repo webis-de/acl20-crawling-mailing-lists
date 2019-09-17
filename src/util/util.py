@@ -43,3 +43,50 @@ def decode_message_part(message_part):
         return message_part.get_payload(decode=True).decode(charset, errors='ignore')
     except LookupError:
         return message_part.get_payload(decode=True).decode('us-ascii', errors='ignore')
+
+
+def retrieve_email_thread(es, index, message_id):
+    terms = [message_id]
+    retrieved_ids = set()
+    query = {
+        'query': {
+            'bool': {
+                'filter': {
+                    'bool': {
+                        'should': [
+                            {'terms': {'headers.message_id.keyword': terms}},
+                            {'terms': {'headers.in_reply_to.keyword': terms}}
+                        ]
+                    }
+                }
+            }
+        },
+        'sort': {
+            '@timestamp': {'order': 'asc'}
+        }
+    }
+
+    docs = []
+    while True:
+        if retrieved_ids:
+            query['query']['bool']['must_not'] = {'terms': {'headers.message_id.keyword': list(retrieved_ids)}}
+
+        results = es.search(index=index, body=query, size=500)
+        if not results['hits']['hits']:
+            break
+
+        terms_temp = set()
+        for hit in results['hits']['hits']:
+            docs.append(hit)
+            headers = hit['_source']['headers']
+
+            if headers.get('message_id'):
+                retrieved_ids.add(headers['message_id'])
+
+            if headers.get('in_reply_to'):
+                terms_temp.add(headers['in_reply_to'])
+
+        terms.clear()
+        terms.extend(terms_temp - retrieved_ids)
+
+    return sorted(docs, key=lambda d: d['sort'])
