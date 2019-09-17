@@ -41,7 +41,7 @@
         fetch(API_REFORMAT_URL, {
             method: 'post',
             headers: {
-                'Content-Type': 'application/json',
+                'Content-Type': 'text/plain',
             },
             body: text,
             signal: abortController.signal,
@@ -94,7 +94,7 @@
             fetch(API_PREDICT_LINES_URL, {
                 method: 'post',
                 headers: {
-                    'Content-Type': 'application/json',
+                    'Content-Type': 'text/plain',
                 },
                 body: e.innerText,
                 signal: abortController.signal,
