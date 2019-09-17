@@ -128,29 +128,36 @@ def generate_message(index, filename, nlp, counter):
                 '_type': 'message',
                 '_id': doc_id,
                 '_op_type': 'update',
+                'scripted_upsert': True,
                 'script': {
-                    'source': 'ctx.op = "none"'     # if document exists, do nothing
-                },
-                'upsert': {                         # upsert if document does not exist
-                    '@timestamp': mail_date,
-                    'groupname': os.path.basename(os.path.dirname(filename)),
-                    'warc_file': os.path.join(os.path.basename(os.path.dirname(filename)),
-                                              os.path.basename(filename)),
-                    'warc_offset': iterator.offset,
-                    'news_url': warc_headers.get_header('WARC-News-URL'),
-                    'headers': {
-                        'message_id': mail_headers.get('message-id'),
-                        'from': from_header,
-                        'from_email': from_email.group(0) if from_email is not None else '',
-                        'subject': mail_headers.get('subject'),
-                        'to': mail_headers.get('to'),
-                        'cc': mail_headers.get('cc'),
-                        'in_reply_to': mail_headers.get('in-reply-to'),
-                        'list_id': mail_headers.get('list-id')
-                    },
-                    'lang': lang,
-                    'text_plain': mail_text,
-                    'text_html': mail_html
+                    'source': '''
+                        if (ctx._source.containsKey("lang")) {
+                            params.doc.remove("lang");
+                        }
+                        ctx._source.putAll(params.doc);                    
+                    ''',
+                    'params': {
+                        'doc': {
+                            'groupname': os.path.basename(os.path.dirname(filename)),
+                            'warc_file': os.path.join(os.path.basename(os.path.dirname(filename)),
+                                                      os.path.basename(filename)),
+                            'warc_offset': iterator.offset,
+                            'news_url': warc_headers.get_header('WARC-News-URL'),
+                            'headers': {
+                                'message_id': mail_headers.get('message-id'),
+                                'from': from_header,
+                                'from_email': from_email.group(0) if from_email is not None else '',
+                                'subject': mail_headers.get('subject'),
+                                'to': mail_headers.get('to'),
+                                'cc': mail_headers.get('cc'),
+                                'in_reply_to': mail_headers.get('in-reply-to'),
+                                'list_id': mail_headers.get('list-id')
+                            },
+                            'lang': lang,
+                            'text_plain': mail_text,
+                            'text_html': mail_html
+                        }
+                    }
                 }
             }
 
