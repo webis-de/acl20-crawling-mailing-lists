@@ -49,7 +49,7 @@
     }
 
     function showThread(message_id, callback = null) {
-        fetch(API_GET_THREAD_URL + '?message_id=' + encodeURI(message_id), {
+        fetch(API_GET_THREAD_URL + '?message_id=' + encodeURIComponent(message_id), {
             method: 'get',
             signal: abortController.signal,
             importance: 'high'
