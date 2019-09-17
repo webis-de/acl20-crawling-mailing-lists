@@ -89,8 +89,10 @@
             reformatButton.classList.add('uk-button', 'uk-button-default', 'uk-margin-small-right');
             reformatButton.addEventListener('click', e => {
                 e.preventDefault();
+
                 e.target.innerText = 'Loading...';
                 e.target.disabled = true;
+
                 reformatMail(text, targetElement, () => {
                     e.target.parentElement.removeChild(e.target);
                 });
@@ -99,17 +101,17 @@
 
             if (addShowThreadButtons) {
                 let threadButton = document.createElement('button');
-                threadButton.innerText = 'Show Thread';
+                const buttonText = 'Show Thread';
+                threadButton.innerText = buttonText;
                 threadButton.classList.add('uk-button', 'uk-button-default');
                 threadButton.addEventListener('click', e => {
                     e.preventDefault();
 
-                    let originalButtonText = e.target.innerText;
                     e.target.innerText = 'Loading...';
                     e.target.disabled = true;
 
                     showThread(messageId, () => {
-                        e.target.innerText = originalButtonText;
+                        e.target.innerText = buttonText;
                         e.target.disabled = false;
                     })
                 });
