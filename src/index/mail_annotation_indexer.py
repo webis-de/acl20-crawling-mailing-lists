@@ -14,6 +14,7 @@ import spacy
 from spacy_langdetect import LanguageDetector
 from tensorflow.python.keras import models
 import sys
+from time import time
 from tqdm import tqdm
 
 ANNOTATION_VERSION = 1
@@ -197,6 +198,7 @@ def generate_docs(batch, index, model=None, nlp=None):
                 output_doc['lang'] = nlp(message_text)._.language['language']
 
             output_doc['annotation_version'] = ANNOTATION_VERSION
+            output_doc['@modified'] = int(time() * 1000)
 
             progress.update(1)
 
