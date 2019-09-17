@@ -1,7 +1,7 @@
 (() => {
     let abortController = null;
 
-    function labelLines(targetElement, lines) {
+    function labelLines(lines, targetElement) {
         let table = document.createElement('table');
         table.classList.add('labeled-lines');
         for (let l in lines) {
@@ -10,7 +10,7 @@
             let tdBody = document.createElement('td');
 
             if (lines[l][0] instanceof Array) {
-                labelLines(tdBody, lines[l]);
+                labelLines(lines[l], tdBody);
             } else {
                 let className = lines[l][1].replace(/_/g, ' ');
                 let classNameClass = lines[l][1].replace(/</g, '').replace(/>/g, '').replace(/_/g, '-');
@@ -41,7 +41,7 @@
         }).then(response => {
             return response.json();
         }).then(json => {
-            labelLines(targetElement, json);
+            labelLines(json, targetElement);
             if (callback !== null) {
                 callback();
             }
@@ -64,8 +64,6 @@
 
             UIkit.modal(modal).show();
             processResults(json, modalContent);
-            predictLines(modalContent);
-            UIkit.update();
 
             if (callback !== null) {
                 callback();
@@ -73,59 +71,55 @@
         });
     }
 
-    function predictLines(targetElement, addShowThreadButtons = false) {
-        for (let e of targetElement.querySelectorAll('.plaintext-body')) {
-            if (e.classList.contains('no-content')) {
-                continue;
+    function predictLines(messageId, text, targetElement, targetElementForControls,
+                          addShowThreadButtons = false, callback = null) {
+        fetch(API_PREDICT_LINES_URL, {
+            method: 'post',
+            headers: {'Content-Type': 'text/plain'},
+            body: text,
+            signal: abortController.signal,
+            importance: 'low'
+        }).then(response => {
+            return response.json();
+        }).then(json => {
+            labelLines(json, targetElement);
+
+            let reformatButton = document.createElement('button');
+            reformatButton.innerText = 'Reformat';
+            reformatButton.classList.add('uk-button', 'uk-button-default', 'uk-margin-small-right');
+            reformatButton.addEventListener('click', e => {
+                e.preventDefault();
+                e.target.innerText = 'Loading...';
+                e.target.disabled = true;
+                reformatMail(text, targetElement, () => {
+                    e.target.parentElement.removeChild(e.target);
+                });
+            });
+            targetElementForControls.appendChild(reformatButton);
+
+            if (addShowThreadButtons) {
+                let threadButton = document.createElement('button');
+                threadButton.innerText = 'Show Thread';
+                threadButton.classList.add('uk-button', 'uk-button-default');
+                threadButton.addEventListener('click', e => {
+                    e.preventDefault();
+
+                    let originalButtonText = e.target.innerText;
+                    e.target.innerText = 'Loading...';
+                    e.target.disabled = true;
+
+                    showThread(messageId, () => {
+                        e.target.innerText = originalButtonText;
+                        e.target.disabled = false;
+                    })
+                });
+                targetElementForControls.appendChild(threadButton);
             }
 
-            fetch(API_PREDICT_LINES_URL, {
-                method: 'post',
-                headers: {'Content-Type': 'text/plain'},
-                body: e.innerText,
-                signal: abortController.signal,
-                importance: 'low'
-            }).then(response => {
-                return response.json();
-            }).then(json => {
-                labelLines(e, json);
-
-                if (addShowThreadButtons) {
-                    let threadButton = document.createElement('button');
-                    threadButton.innerText = 'Show Thread';
-                    threadButton.classList.add('uk-button', 'uk-button-default');
-                    threadButton.addEventListener('click', event => {
-                        event.preventDefault();
-
-                        let originalButtonText = event.target.innerText;
-                        event.target.innerText = 'Loading...';
-                        event.target.disabled = true;
-
-                        let messageId = event.target.parentElement.querySelector('.plaintext-body').dataset.messageId;
-                        showThread(messageId, () => {
-                            event.target.innerText = originalButtonText;
-                            event.target.disabled = false;
-                        })
-                    });
-                    e.parentElement.prepend(threadButton);
-                }
-
-                let reformatButton = document.createElement('button');
-                reformatButton.innerText = 'Reformat';
-                reformatButton.classList.add('uk-button', 'uk-button-default', 'uk-margin-small-right');
-                reformatButton.addEventListener('click', event => {
-                    event.preventDefault();
-                    event.target.innerText = 'Loading...';
-                    event.target.disabled = true;
-                    let textElement = event.target.parentElement.querySelector('.plaintext-body');
-                    let text = textElement.dataset.originalText;
-                    reformatMail(text, textElement, () => {
-                        event.target.parentElement.removeChild(event.target);
-                    });
-                });
-                e.parentElement.prepend(reformatButton);
-            });
-        }
+            if (callback !== null) {
+                callback();
+            }
+        });
     }
 
     function headerDict2DefList(dict) {
@@ -147,7 +141,7 @@
         return dl;
     }
 
-    function processResults(hits, targetElement) {
+    function processResults(hits, targetElement, addShowThreadButtons = false) {
         for (let hit in hits) {
             let source = hits[hit]['_source'];
 
@@ -172,19 +166,32 @@
             mailHeaders.appendChild(headerDict2DefList(source['headers']));
             grid.appendChild(mailHeaders);
 
-            let plainText = document.createElement('div');
-            plainText.appendChild(document.createElement('pre'));
-            plainText.firstChild.classList.add('plaintext-body');
+            let plainTextContainer = document.createElement('div');
+            let plainTextControls = document.createElement('div');
+            let plainTextBody = document.createElement('pre');
+            plainTextBody.classList.add('plaintext-body');
 
+            let intersectionObserver = null;
             if (source['text_plain'].trim()) {
-                plainText.firstChild.innerText = source['text_plain'];
-                plainText.firstChild.dataset.messageId = source['headers']['message_id'];
-                plainText.firstChild.dataset.originalText = source['text_plain'];
+                plainTextBody.innerText = source['text_plain'];
+                plainTextBody.dataset.messageId = source['headers']['message_id'];
+                plainTextBody.dataset.originalText = source['text_plain'];
+                intersectionObserver = new IntersectionObserver((entries) => {
+                    // predict lines only when mail contents are within the viewport
+                    if (entries[0].isIntersecting) {
+                        predictLines(source['headers']['message_id'], source['text_plain'],
+                            plainTextBody, plainTextControls, addShowThreadButtons);
+                        intersectionObserver.disconnect();
+                    }
+                }, {threshold: [0]});
             } else {
-                plainText.appendChild(document.createTextNode('<no plaintext content>'));
-                plainText.classList.add('no-content');
+                plainTextBody.appendChild(document.createTextNode('<no plaintext content>'));
+                plainTextBody.classList.add('no-content');
             }
-            grid.appendChild(plainText);
+
+            plainTextContainer.appendChild(plainTextControls);
+            plainTextContainer.appendChild(plainTextBody);
+            grid.appendChild(plainTextContainer);
 
             let html = document.createElement('div');
             html.classList.add('html-body');
@@ -202,48 +209,53 @@
             container.classList.add('query-result', 'uk-margin-large-bottom');
             container.appendChild(grid);
             targetElement.appendChild(container);
-            UIkit.update();
+            if (null !== intersectionObserver) {
+                intersectionObserver.observe(plainTextContainer);
+            }
         }
     }
 
-    const queryButton = document.getElementById('query-button');
-    const querySpinner = document.getElementById('query-spinner');
-    const queryResults = document.getElementById('query-results');
-    const queryResultsTotal = document.getElementById('query-results-total');
+    addEventListener('DOMContentLoaded', () => {
+        const queryButton = document.getElementById('query-button');
+        const querySpinner = document.getElementById('query-spinner');
+        const queryResults = document.getElementById('query-results');
+        const queryResultsTotal = document.getElementById('query-results-total');
 
-    const editor = ace.edit('query-editor');
-    let JsonMode = ace.require("ace/mode/json").Mode;
-    editor.session.setMode(new JsonMode());
-    editor.session.setUseWrapMode(true);
-    editor.commands.addCommand({
-        name: 'submit',
-        bindKey: { win: 'Ctrl-Enter', mac: 'Command-Return' },
-        exec: () => { queryButton.click(); }
-    });
+        const editor = ace.edit('query-editor');
+        let JsonMode = ace.require("ace/mode/json").Mode;
+        editor.session.setMode(new JsonMode());
+        editor.session.setUseWrapMode(true);
+        editor.commands.addCommand({
+            name: 'submit',
+            bindKey: {win: 'Ctrl-Enter', mac: 'Command-Return'},
+            exec: () => {
+                queryButton.click();
+            }
+        });
 
-    queryButton.addEventListener('click', e => {
-        querySpinner.classList.remove('uk-hidden');
+        queryButton.addEventListener('click', e => {
+            querySpinner.classList.remove('uk-hidden');
 
-        if (abortController !== null) {
-            abortController.abort();
-        }
-        abortController = new AbortController();
+            if (abortController !== null) {
+                abortController.abort();
+            }
+            abortController = new AbortController();
 
-        fetch(API_QUERY_MAILS_URL, {
-            method: 'post',
-            headers: {'Content-Type': 'application/json'},
-            body: editor.getValue(),
-            signal: abortController.signal
-        }).then(response => {
-            return response.json();
-        }).then(json => {
-            queryResults.innerHTML = '';
-            queryResultsTotal.innerHTML = `<strong>Total results:</strong> ${json['total']}`;
-            processResults(json['hits'], queryResults);
-            querySpinner.classList.add('uk-hidden');
-            predictLines(queryResults, true);
-        }).catch(e => {
-            console.info("Fetch aborted: " + e.message);
+            fetch(API_QUERY_MAILS_URL, {
+                method: 'post',
+                headers: {'Content-Type': 'application/json'},
+                body: editor.getValue(),
+                signal: abortController.signal
+            }).then(response => {
+                return response.json();
+            }).then(json => {
+                queryResults.innerHTML = '';
+                queryResultsTotal.innerHTML = `<strong>Total results:</strong> ${json['total']}`;
+                processResults(json['hits'], queryResults, true);
+                querySpinner.classList.add('uk-hidden');
+            }).catch(e => {
+                console.info("Fetch aborted: " + e.message);
+            });
         });
     });
 })();
