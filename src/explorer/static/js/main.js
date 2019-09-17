@@ -27,42 +27,29 @@
         targetElement.appendChild(table);
     }
 
-    function reformatMail(event) {
-        event.preventDefault();
-
-        let textElement = event.target.parentElement.querySelector('.plaintext-body');
-        event.target.innerText = 'Loading...';
-        event.target.disabled = true;
-        let text = textElement.dataset.originalText;
+    function reformatMail(text, targetElement, callback = null) {
         if (!text) {
             return;
         }
 
         fetch(API_REFORMAT_URL, {
             method: 'post',
-            headers: {
-                'Content-Type': 'text/plain',
-            },
+            headers: {'Content-Type': 'text/plain'},
             body: text,
             signal: abortController.signal,
             importance: 'high'
         }).then(response => {
             return response.json();
         }).then(json => {
-            labelLines(textElement, json);
-            event.target.parentElement.removeChild(event.target);
+            labelLines(targetElement, json);
+            if (callback !== null) {
+                callback();
+            }
         });
     }
 
-    function showThread(event) {
-        event.preventDefault();
-
-        let originalButtonText = event.target.innerText;
-        event.target.innerText = 'Loading...';
-        event.target.disabled = true;
-        let textElement = event.target.parentElement.querySelector('.plaintext-body');
-
-        fetch(API_GET_THREAD_URL + '?message_id=' + encodeURI(textElement.dataset.messageId), {
+    function showThread(message_id, callback = null) {
+        fetch(API_GET_THREAD_URL + '?message_id=' + encodeURI(message_id), {
             method: 'get',
             signal: abortController.signal,
             importance: 'high'
@@ -80,12 +67,13 @@
             predictLines(modalContent);
             UIkit.update();
 
-            event.target.innerText = originalButtonText;
-            event.target.disabled = false;
+            if (callback !== null) {
+                callback();
+            }
         });
     }
 
-    function predictLines(targetElement, addThreadButton = false) {
+    function predictLines(targetElement, addShowThreadButtons = false) {
         for (let e of targetElement.querySelectorAll('.plaintext-body')) {
             if (e.classList.contains('no-content')) {
                 continue;
@@ -93,9 +81,7 @@
 
             fetch(API_PREDICT_LINES_URL, {
                 method: 'post',
-                headers: {
-                    'Content-Type': 'text/plain',
-                },
+                headers: {'Content-Type': 'text/plain'},
                 body: e.innerText,
                 signal: abortController.signal,
                 importance: 'low'
@@ -104,18 +90,39 @@
             }).then(json => {
                 labelLines(e, json);
 
-                if (addThreadButton) {
+                if (addShowThreadButtons) {
                     let threadButton = document.createElement('button');
                     threadButton.innerText = 'Show Thread';
                     threadButton.classList.add('uk-button', 'uk-button-default');
-                    threadButton.addEventListener('click', showThread);
+                    threadButton.addEventListener('click', event => {
+                        event.preventDefault();
+
+                        let originalButtonText = event.target.innerText;
+                        event.target.innerText = 'Loading...';
+                        event.target.disabled = true;
+
+                        let messageId = event.target.parentElement.querySelector('.plaintext-body').dataset.messageId;
+                        showThread(messageId, () => {
+                            event.target.innerText = originalButtonText;
+                            event.target.disabled = false;
+                        })
+                    });
                     e.parentElement.prepend(threadButton);
                 }
 
                 let reformatButton = document.createElement('button');
                 reformatButton.innerText = 'Reformat';
                 reformatButton.classList.add('uk-button', 'uk-button-default', 'uk-margin-small-right');
-                reformatButton.addEventListener('click', reformatMail);
+                reformatButton.addEventListener('click', event => {
+                    event.preventDefault();
+                    event.target.innerText = 'Loading...';
+                    event.target.disabled = true;
+                    let textElement = event.target.parentElement.querySelector('.plaintext-body');
+                    let text = textElement.dataset.originalText;
+                    reformatMail(text, textElement, () => {
+                        event.target.parentElement.removeChild(event.target);
+                    });
+                });
                 e.parentElement.prepend(reformatButton);
             });
         }
@@ -224,9 +231,7 @@
 
         fetch(API_QUERY_MAILS_URL, {
             method: 'post',
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers: {'Content-Type': 'application/json'},
             body: editor.getValue(),
             signal: abortController.signal
         }).then(response => {
