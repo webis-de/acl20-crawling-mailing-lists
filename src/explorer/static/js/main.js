@@ -183,7 +183,11 @@
                             plainTextBody, plainTextControls, addShowThreadButtons);
                         intersectionObserver.disconnect();
                     }
-                }, {threshold: [0]});
+                }, {
+                    threshold: [0],
+                    trackVisibility: true,
+                    delay: 100
+                });
             } else {
                 plainTextBody.appendChild(document.createTextNode('<no plaintext content>'));
                 plainTextBody.classList.add('no-content');
