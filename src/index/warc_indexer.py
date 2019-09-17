@@ -15,6 +15,7 @@ import re
 import spacy
 from spacy_langdetect import LanguageDetector
 import sys
+from time import time
 from util.util import decode_message_part
 from warcio import ArchiveIterator
 
@@ -50,6 +51,7 @@ def start_indexer(input_dir, index, spark_context):
                 'message': {
                     'properties': {
                         '@timestamp': {'type': 'date', 'format': 'yyyy-MM-dd HH:mm:ssZZ'},
+                        '@modified': {'type': 'date', 'format': 'epoch_millis'},
                         'groupname': {'type': 'keyword'},
                         'warc_file': {'type': 'keyword'},
                         'warc_offset': {'type': 'long'},
@@ -138,10 +140,13 @@ def generate_message(index, filename, nlp, counter):
                     ''',
                     'params': {
                         'doc': {
+                            '@timestamp': mail_date,
+                            '@modified': int(time() * 1000),
                             'groupname': os.path.basename(os.path.dirname(filename)),
                             'warc_file': os.path.join(os.path.basename(os.path.dirname(filename)),
                                                       os.path.basename(filename)),
                             'warc_offset': iterator.offset,
+                            'warc_id': doc_id,
                             'news_url': warc_headers.get_header('WARC-News-URL'),
                             'headers': {
                                 'message_id': mail_headers.get('message-id'),
