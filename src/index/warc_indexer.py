@@ -163,7 +163,8 @@ def generate_message(index, filename, nlp, counter):
                             'text_html': mail_html
                         }
                     }
-                }
+                },
+                'upsert': {}
             }
 
 
