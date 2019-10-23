@@ -26,7 +26,7 @@ from warcio import ArchiveIterator
 )
 def main(input_dir, index):
     conf = pyspark.SparkConf()
-    conf.setMaster('local[*]')
+    conf.setMaster('yarn')
     conf.setAppName('Mail WARC Indexer')
     sc = pyspark.SparkContext(conf=conf)
     sc.setJobDescription('Mail WARC Indexer for {}'.format(input_dir))
