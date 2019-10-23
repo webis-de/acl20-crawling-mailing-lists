@@ -224,6 +224,7 @@
     addEventListener('DOMContentLoaded', () => {
         const queryButton = document.getElementById('query-button');
         const querySpinner = document.getElementById('query-spinner');
+        const queryErrorMessage = document.getElementById('query-error-message');
         const queryResults = document.getElementById('query-results');
         const queryResultsTotal = document.getElementById('query-results-total');
 
@@ -241,6 +242,7 @@
 
         queryButton.addEventListener('click', e => {
             querySpinner.classList.remove('uk-hidden');
+            queryErrorMessage.classList.add('uk-hidden');
 
             if (abortController !== null) {
                 abortController.abort();
@@ -253,14 +255,25 @@
                 body: editor.getValue(),
                 signal: abortController.signal
             }).then(response => {
-                return response.json();
+                if (response.ok) {
+                    return response.json();
+                }
+                throw response;
             }).then(json => {
                 queryResults.innerHTML = '';
                 queryResultsTotal.innerHTML = `<strong>Total results:</strong> ${json['total']}`;
                 processResults(json['hits'], queryResults, true);
                 querySpinner.classList.add('uk-hidden');
             }).catch(e => {
-                console.info("Fetch aborted: " + e.message);
+                if (e instanceof Response) {
+                    e.text().then(text => {
+                        queryErrorMessage.querySelector('p').innerText = JSON.parse(text)["error"];
+                        querySpinner.classList.add('uk-hidden');
+                        queryErrorMessage.classList.remove('uk-hidden');
+                    });
+                    return;
+                }
+                console.info(e);
             });
         });
     });

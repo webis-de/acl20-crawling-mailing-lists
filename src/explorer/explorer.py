@@ -1,6 +1,7 @@
 # Dataset explorer web application.
 
 from elasticsearch import Elasticsearch
+from elasticsearch.exceptions import ConnectionTimeout, RequestError
 from tensorflow.python.keras import models
 from flask import Flask, abort, jsonify, render_template, request
 from parsing.message_segmenter import predict_raw_text, load_fasttext_model, reformat_raw_text_recursive
@@ -24,7 +25,12 @@ def index_route():
 @app.route('/query-mails', methods=['POST'])
 def query_mails():
     query = request.get_json()
-    return jsonify(es.search(index=app.config.get('ES_INDEX'), body=query).get('hits'))
+    try:
+        return jsonify(es.search(index=app.config.get('ES_INDEX'), body=query).get('hits'))
+    except RequestError as e:
+        abort(400, e.info["error"]["root_cause"][0]["reason"])
+    except ConnectionTimeout as e:
+        abort(504, str(e.info).split(':')[1].strip())
 
 
 @app.route('/predict-lines', methods=['POST'])
@@ -44,6 +50,16 @@ def get_thread():
     if not request.args.get('message_id'):
         abort(400, 'Missing message_id')
     return jsonify(util.retrieve_email_thread(es, app.config.get('ES_INDEX'), request.args.get('message_id')))
+
+
+@app.errorhandler(400)
+def error_bad_request(e):
+    return jsonify(error=e.description), 400
+
+
+@app.errorhandler(504)
+def error_gateway_timeout(e):
+    return jsonify(error=e.description), 504
 
 
 if __name__ == '__main__':
