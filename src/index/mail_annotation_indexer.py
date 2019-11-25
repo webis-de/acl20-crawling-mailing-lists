@@ -123,16 +123,16 @@ def start_spark_worker(slice_id, max_slices, index, model, fasttext_model, arg_l
 
     if arg_lexicon:
         logger.info('Compiling arguing lexicon regex list...')
-        arg_lexicon = [(re.compile(regex), regex, cls) for regex, cls in arg_lexicon]
+        arg_lexicon = [(re.compile(regex, re.IGNORECASE), regex, cls) for regex, cls in arg_lexicon]
 
     logger.info('Retrieving initial batch (slice {}/{})...'.format(slice_id, max_slices))
     es = get_es_client()
-    results = es.search(index=index, scroll='60m', size=250, body={
+    results = es.search(index=index, scroll='35m', size=250, body={
         'sort': ['_id'],
         'slice': {
             'id': slice_id,
             'max': max_slices,
-            'field': 'warc_offset'
+            'field': '@timestamp'
         },
         'query': {
             'bool': {
@@ -153,8 +153,10 @@ def start_spark_worker(slice_id, max_slices, index, model, fasttext_model, arg_l
             helpers.bulk(es, itertools.chain([peek], doc_gen))
             logger.info('Finished indexing batch.')
         except StopIteration:
-            logger.info('Retrieving next batch (slice {}/{})...'.format(slice_id, max_slices))
-            results = es.scroll(scroll_id=results['_scroll_id'], scroll='60m')
+            pass
+
+        logger.info('Retrieving next batch (slice {}/{})...'.format(slice_id, max_slices))
+        results = es.scroll(scroll_id=results['_scroll_id'], scroll='35m')
 
 
 def generate_docs(batch, index, model=None, nlp=None, arg_lexicon=None, progress_bar=True):
@@ -167,6 +169,10 @@ def generate_docs(batch, index, model=None, nlp=None, arg_lexicon=None, progress
         doc_id = doc['_id'] if not json_input else doc.get('meta', {}).get('warc_id')
 
         if not doc_id:
+            continue
+
+        if doc.get('annotation_version', -1) >= ANNOTATION_VERSION:
+            logger.error('{}: document annotation version greater or equal {}.'.format(doc_id, ANNOTATION_VERSION))
             continue
 
         output_doc = {}
@@ -235,13 +241,11 @@ def generate_docs(batch, index, model=None, nlp=None, arg_lexicon=None, progress
             arg_classes = {}
 
             logger.info('Matching against arguing lexicon...')
-            message_text_lc = message_text.lower()
             for regex, regex_text, cls in arg_lexicon:
                 if cls in arg_classes:
                     continue
-                if regex.search(message_text_lc) is not None:
+                if regex.search(message_text) is not None:
                     arg_classes[cls] = regex_text
-            del message_text_lc
 
             output_doc['arg_classes'] = list(arg_classes.keys())
             output_doc['arg_classes_matched_regex'] = list(arg_classes.values())
