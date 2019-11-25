@@ -120,6 +120,7 @@ def start_spark_worker(slice_id, max_slices, index, model, fasttext_model, arg_l
     load_fasttext_model(fasttext_model)
     model = models.load_model(model)
 
+
     if arg_lexicon:
         logger.info('Compiling arguing lexicon regex list...')
         arg_lexicon = [(re.compile(regex), regex, cls) for regex, cls in arg_lexicon]
@@ -130,7 +131,8 @@ def start_spark_worker(slice_id, max_slices, index, model, fasttext_model, arg_l
         'sort': ['_id'],
         'slice': {
             'id': slice_id,
-            'max': max_slices
+            'max': max_slices,
+            'field': 'warc_offset'
         },
         'query': {
             'bool': {
