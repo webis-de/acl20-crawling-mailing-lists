@@ -7,8 +7,9 @@ data
 .idea
 
 # Python
-venv
+venv*/
 .venv
+python3.*/
 *.pyc
 __pycache__/
 pip-log.txt

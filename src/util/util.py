@@ -1,6 +1,18 @@
 from elasticsearch import Elasticsearch
+import pyspark
 import re
 import unicodedata
+
+
+def get_spark_context(app_name, job_desc=None):
+    conf = pyspark.SparkConf()
+    conf.setMaster('yarn')
+    conf.setAppName(app_name)
+    sc = pyspark.SparkContext(conf=conf)
+    sc.setLogLevel('INFO')
+    if job_desc:
+        sc.setJobDescription(job_desc)
+    return sc
 
 
 def get_es_client():

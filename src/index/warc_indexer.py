@@ -10,13 +10,12 @@ from glob import glob
 from functools import partial
 import pytz
 import os
-import pyspark
 import re
 import spacy
 from spacy_langdetect import LanguageDetector
 import sys
 from time import time
-from util.util import decode_message_part, get_es_client
+from util.util import decode_message_part, get_es_client, get_spark_context
 from warcio import ArchiveIterator
 
 
@@ -24,17 +23,13 @@ from warcio import ArchiveIterator
 @click.argument('input-dir', type=click.Path(exists=True, file_okay=False))
 @click.argument('index')
 def main(input_dir, index):
-    conf = pyspark.SparkConf()
-    conf.setMaster('yarn')
-    conf.setAppName('Mail WARC Indexer')
-    sc = pyspark.SparkContext(conf=conf)
-    sc.setJobDescription('Mail WARC Indexer for {}'.format(input_dir))
-
-    start_indexer(input_dir, index, sc)
+    start_indexer(input_dir, index)
 
 
-def start_indexer(input_dir, index, spark_context):
+def start_indexer(input_dir, index):
     es = get_es_client()
+    sc = get_spark_context('Mail WARC Indexer', 'Mail WARC Indexer for {}'.format(input_dir))
+
     if not es.indices.exists(index=index):
         es.indices.create(index=index, body={
             'settings': {
@@ -59,11 +54,11 @@ def start_indexer(input_dir, index, spark_context):
             }
         })
 
-    counter = spark_context.accumulator(0)
+    counter = sc.accumulator(0)
 
     print("Listing group directories...", file=sys.stderr)
     group_dirs = glob(os.path.join(input_dir, 'gmane.*'))
-    group_dirs = spark_context.parallelize(group_dirs, len(group_dirs) // 5)
+    group_dirs = sc.parallelize(group_dirs, len(group_dirs) // 5)
 
     print('Listing WARCS...', file=sys.stderr)
     warcs = group_dirs.flatMap(lambda d: glob(os.path.join(d, '*.warc.gz')))
