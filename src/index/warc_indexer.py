@@ -2,12 +2,12 @@
 #
 # Index WARC files containing email/newsgroup messages to Elasticsearch.
 
-from elasticsearch import Elasticsearch, helpers
+import click
+from elasticsearch import helpers
 import email
 import email.utils
 from glob import glob
 from functools import partial
-import plac
 import pytz
 import os
 import pyspark
@@ -16,14 +16,13 @@ import spacy
 from spacy_langdetect import LanguageDetector
 import sys
 from time import time
-from util.util import decode_message_part
+from util.util import decode_message_part, get_es_client
 from warcio import ArchiveIterator
 
 
-@plac.annotations(
-    input_dir=('Input directory containing newsgroup directories', 'positional', None, str, None, 'DIR'),
-    index=('Output Elasticsearch index', 'positional', None, str, None, 'INDEX')
-)
+@click.command()
+@click.argument('input-dir', type=click.Path(exists=True, file_okay=False))
+@click.argument('index')
 def main(input_dir, index):
     conf = pyspark.SparkConf()
     conf.setMaster('yarn')
@@ -32,11 +31,6 @@ def main(input_dir, index):
     sc.setJobDescription('Mail WARC Indexer for {}'.format(input_dir))
 
     start_indexer(input_dir, index, sc)
-
-
-def get_es_client():
-    return Elasticsearch(['betaweb015', 'betaweb017', 'betaweb020'],
-                         sniff_on_start=True, sniff_on_connection_fail=True, timeout=360)
 
 
 def start_indexer(input_dir, index, spark_context):
@@ -169,4 +163,4 @@ def generate_message(index, filename, nlp, counter):
 
 
 if __name__ == '__main__':
-    plac.call(main)
+    main()

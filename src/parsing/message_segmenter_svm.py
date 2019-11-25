@@ -2,14 +2,13 @@
 # of the 2005 paper "Email Data Cleaning" by Tang et al.
 # For actual message segmentation, use the deep segmenter from message_segmenter.py.
 
+import click
 import json
 import numpy as np
 import os
 import pickle
-import plac
 import re
 from sklearn import svm
-import sys
 
 CONTENT = 0
 HEADER = 1
@@ -36,12 +35,28 @@ label_map = {
 }
 
 
-@plac.annotations(
-    cmd=('Command', 'positional', None, str, None, 'CMD'),
-    input_file=('Input JSONL file', 'positional', None, str, None, 'FILE'),
-    model_dir=('Model directory', 'positional', None, str, None, 'DIR')
-)
-def main(cmd, input_file, model_dir):
+@click.group()
+def main():
+    pass
+
+
+@main.command()
+@click.argument('train-data', type=click.Path(exists=True, dir_okay=False))
+@click.argument('model-dir', type=click.Path(exists=True, file_okay=False))
+def train(train_data, model_dir):
+    labeled_mails, _ = load_mails(train_data)
+    train_clf(labeled_mails, model_dir)
+
+
+@main.command()
+@click.argument('test-data', type=click.Path(exists=True, dir_okay=False))
+@click.argument('model-dir', type=click.Path(exists=True, file_okay=False))
+def predict(test_data, model_dir):
+    _, unlabeled_mails = load_mails(test_data)
+    predict(unlabeled_mails, model_dir)
+
+
+def load_mails(input_file):
     labeled_mails = []
     unlabeled_mails = []
     for line in open(input_file).readlines():
@@ -51,16 +66,10 @@ def main(cmd, input_file, model_dir):
             continue
 
         labeled_mails.append([l for l in label_lines(mail_json) if not check_if_quotation_line(l[0])])
-    print('Labeled:', len(labeled_mails))
-    print('Unlabeled:', len(unlabeled_mails))
+    click.echo('Labeled:', len(labeled_mails), err=True)
+    click.echo('Unlabeled:', len(unlabeled_mails), err=True)
 
-    if cmd == 'train':
-        train_clf(labeled_mails, model_dir)
-    elif cmd == 'predict':
-        predict(unlabeled_mails, model_dir)
-    else:
-        print('Invalid command.', file=sys.stderr)
-        exit(1)
+    return labeled_mails, unlabeled_mails
 
 
 def check_if_quotation_line(line):
@@ -76,32 +85,32 @@ def train_clf(labeled_mails, model_dir):
     y_signature_start, y_signature_end = get_boundary_labels(y_signature, SIGNATURE)
     y_code_start, y_code_end = get_boundary_labels(y_code, CODE)
 
-    print('Training header start model...')
+    click.echo('Training header start model...', err=True)
     clf_header_start = svm.SVC(kernel='poly', gamma='scale')
     clf_header_start.fit(X_header, y_header_start)
     pickle.dump(clf_header_start, open(os.path.join(model_dir, 'header_start.model'), 'wb'))
 
-    print('Training header end model...')
+    click.echo('Training header end model...', err=True)
     clf_header_end = svm.SVC(kernel='poly', gamma='scale')
     clf_header_end.fit(X_header, y_header_end)
     pickle.dump(clf_header_end, open(os.path.join(model_dir, 'header_end.model'), 'wb'))
 
-    print('Training signature start model...')
+    click.echo('Training signature start model...', err=True)
     clf_signature_start = svm.SVC(kernel='poly', gamma='scale')
     clf_signature_start.fit(X_signature, y_signature_start)
     pickle.dump(clf_signature_start, open(os.path.join(model_dir, 'signature_start.model'), 'wb'))
 
-    print('Training signature end model...')
+    click.echo('Training signature end model...', err=True)
     clf_signature_end = svm.SVC(kernel='poly', gamma='scale')
     clf_signature_end.fit(X_signature, y_signature_end)
     pickle.dump(clf_signature_end, open(os.path.join(model_dir, 'signature_end.model'), 'wb'))
 
-    print('Training code start model...')
+    click.echo('Training code start model...', err=True)
     clf_code_start = svm.SVC(kernel='poly', gamma='scale')
     clf_code_start.fit(X_code, y_code_start)
     pickle.dump(clf_code_start, open(os.path.join(model_dir, 'code_start.model'), 'wb'))
 
-    print('Training code end model...')
+    click.echo('Training code end model...', err=True)
     clf_code_end = svm.SVC(kernel='poly', gamma='scale')
     clf_code_end.fit(X_code, y_code_end)
     pickle.dump(clf_code_end, open(os.path.join(model_dir, 'code_end.model'), 'wb'))
@@ -154,7 +163,7 @@ def predict(unlabeled_mails, model_dir):
                 cls = CODE
 
             mail[i] = (l, cls)
-            print(mail[i])
+            click.echo(mail[i])
 
 
 def concat_vectors(labeled_mails, callback):
@@ -315,4 +324,4 @@ def vectorize_line_code(line):
 
 
 if __name__ == '__main__':
-    plac.call(main)
+    main()

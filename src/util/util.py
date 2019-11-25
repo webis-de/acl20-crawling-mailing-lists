@@ -1,5 +1,11 @@
+from elasticsearch import Elasticsearch
 import re
 import unicodedata
+
+
+def get_es_client():
+    return Elasticsearch(['betaweb015', 'betaweb017', 'betaweb020'],
+                         sniff_on_start=True, sniff_on_connection_fail=True, timeout=360)
 
 
 def normalize_message_text(text):

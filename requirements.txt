@@ -1,9 +1,9 @@
+click
 elasticsearch>=6.0.0,<7.0.0
 flask
 fasttextmirror
 keras-preprocessing
 numpy
-plac
 pytz
 pyspark
 spacy

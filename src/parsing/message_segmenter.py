@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
-#
-# Deep message segmenter to classify lines of an email or newsgroup message.
 
 from util.util import *
 
+import click
 from datetime import datetime
 import fastText
 from itertools import chain
-from tensorflow.python.keras import callbacks, layers, models
-from tensorflow.python.keras.utils import Sequence
+from tensorflow.keras import callbacks, layers, models
+from tensorflow.keras.utils import Sequence
 import numpy as np
 import json
 import os
-import plac
-import sys
 
 
 label_map_int = {
@@ -53,26 +50,51 @@ MAX_LEN = 12
 CONTEXT = 4
 
 
-@plac.annotations(
-    cmd=('Command', 'positional', None, str, None, 'CMD'),
-    fasttext_model=('FastText Model', 'positional', None, str, None, 'FASTTEXT_BIN'),
-    keras_model=('Keras HDF5 model', 'positional', None, str, None, 'HDF5'),
-    input_file=('Input JSONL file', 'positional', None, str, None, 'JSONL'),
-    output_json=('Output JSONL file', 'option', 'o', str, None, 'OUTPUT'),
-    validation_input=('Validation Data JSON', 'option', 'v', str, None, 'JSONL')
-)
-def main(cmd, fasttext_model, keras_model, input_file, output_json=None, validation_input=None):
-    print('Loading FastText model...', file=sys.stderr)
+@click.group()
+def main():
+    pass
+
+
+# noinspection PyIncorrectDocstring,PyUnresolvedReferences
+@main.command()
+@click.argument('fasttext-model', type=click.Path(exists=True, dir_okay=False))
+@click.argument('train-data', type=click.Path(exists=True, dir_okay=False))
+@click.argument('output', type=click.Path(exists=False))
+@click.option('-v', '--validation-data', help='Validation Data JSON')
+def train(fasttext_model, train_data, output, validation_data):
+    """
+    Train message segmenter to classify lines of an email or newsgroup message.
+
+    Arguments:
+        FASTTEXT_MODEL: pre-trained FastText embedding
+        TRAIN_DATA: input training data as JSON
+        OUTPUT: Model output
+    """
+    click.echo('Loading FastText model...', err=True)
+    load_fasttext_model(fasttext_model)
+    train_model(train_data, output, validation_data)
+
+
+# noinspection PyIncorrectDocstring,PyUnresolvedReferences
+@main.command()
+@click.argument('model', type=click.Path(exists=True, dir_okay=False))
+@click.argument('fasttext-model', type=click.Path(exists=True, dir_okay=False))
+@click.argument('test-data', type=click.Path(exists=True, dir_okay=False))
+@click.option('-o', '--output-json', help='Output JSONL file', type=click.Path(exists=False))
+def predict(model, fasttext_model, test_data, output_json):
+    """
+    Apply trained message segmenter to predict lines of an email or newsgroup message.
+
+    Arguments:
+        MODEL: Trained HDF5 segmenter model
+        FASTTEXT_MODEL: pre-trained FastText embedding
+        TEST_DATA: test message dump as JSON
+    """
+    click.echo('Loading FastText model...', err=True)
     load_fasttext_model(fasttext_model)
 
-    if cmd == 'train':
-        train_model(input_file, keras_model, validation_input)
-    elif cmd == 'predict':
-        line_model = models.load_model(keras_model)
-        predict(line_model, input_file, output_json)
-    else:
-        print('Invalid command.', file=sys.stderr)
-        exit(1)
+    line_model = models.load_model(model)
+    predict(line_model, test_data, output_json)
 
 
 class MailLinesSequence(Sequence):
@@ -163,7 +185,7 @@ class MailLinesSequence(Sequence):
             if self.labeled:
                 batch_labels[i - CONTEXT] = line[1]
                 # line_text = line[0] if line[0] is not None else '<PAD>\n'
-                # print('{:>20}    --->    {}'.format(label_map_inverse[np.argmax(line[1])], line_text), end='')
+                # click.echo('{:>20}    --->    {}'.format(label_map_inverse[np.argmax(line[1])], line_text), end='')
 
             line_vecs = []
             for c in chain(mail_slice[i - CONTEXT:i], [line], mail_slice[i + 1:i + 1 + CONTEXT]):
@@ -249,7 +271,7 @@ def predict(line_model, input_file, output_json=None):
 
     to_stdout = output_json is None
 
-    print('Predicting {}...'.format(input_file), file=sys.stderr)
+    click.echo('Predicting {}...'.format(input_file), err=True)
     with open(input_file, 'r') as f:
         while True:
             pred_seq = MailLinesSequence(f, labeled=False, batch_size=256, max_lines=1000)
@@ -477,7 +499,7 @@ def export_mail_annotation_spans(predictions_softmax, pred_sequence, output_file
 
         if i in pred_sequence.mail_start_index_map:
             if verbose:
-                print(' {0:>>20}    --->    <<< MAIL START >>>'.format(''))
+                click.echo(' {0:>>20}    --->    <<< MAIL START >>>'.format(''))
             mail_dict = pred_sequence.mail_start_index_map[i]
 
         cur_offset = len(text) - 1
@@ -499,7 +521,7 @@ def export_mail_annotation_spans(predictions_softmax, pred_sequence, output_file
             continue
 
         if verbose:
-            print(' {:>20}    --->    {}'.format(label_text, line), end='')
+            click.echo(' {:>20}    --->    {}'.format(label_text, line), nl=False)
 
         if cur_label != prev_label:
             if output_file and prev_label not in ['<pad>', '<empty>']:
@@ -558,4 +580,4 @@ def get_word_vector(word):
 
 
 if __name__ == '__main__':
-    plac.call(main)
+    main()

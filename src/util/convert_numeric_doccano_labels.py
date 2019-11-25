@@ -3,8 +3,8 @@
 # Converter for numeric Doccano labels to text labels. Needed for re-import into Doccano.
 # Adjust the numeric labels in-code according to your Doccano database.
 
+import click
 import json
-import sys
 
 labels_dict = {
     357: "paragraph",
@@ -25,22 +25,29 @@ labels_dict = {
 }
 
 
-for document in sys.stdin:
-    json_doc = json.loads(document)
+@click.command()
+@click.argument('files', nargs=-1)
+def main(files):
+    for file in files:
+        json_doc = json.loads(file)
 
-    labels = []
-    annotations = list(json_doc["annotations"])
+        labels = []
+        annotations = list(json_doc["annotations"])
 
-    converted_doc = dict(json_doc)
-    del converted_doc['annotations']
+        converted_doc = dict(json_doc)
+        del converted_doc['annotations']
 
-    for annotation in annotations:
-        annotation["label"] = labels_dict[annotation["label"]]
-        start_offset = annotation["start_offset"]
-        end_offset = annotation["end_offset"]
-        label = annotation["label"]
+        for annotation in annotations:
+            annotation["label"] = labels_dict[annotation["label"]]
+            start_offset = annotation["start_offset"]
+            end_offset = annotation["end_offset"]
+            label = annotation["label"]
 
-        labels.append((start_offset, end_offset, label))
+            labels.append((start_offset, end_offset, label))
 
-    converted_doc["labels"] = labels
-    print(json.dumps(converted_doc))
+        converted_doc["labels"] = labels
+        click.echo(json.dumps(converted_doc))
+
+
+if __name__ == '__main__':
+    main()

@@ -4,49 +4,39 @@
 # The index is only updated and must exist.
 
 from parsing.message_segmenter import load_fasttext_model, predict_raw_text
+from util.util import get_es_client
 
-from elasticsearch import Elasticsearch, helpers
+import click
+from elasticsearch import helpers
 from collections import defaultdict
 import itertools
 import json
-import plac
 import spacy
 from spacy_langdetect import LanguageDetector
 from tensorflow.python.keras import models
-import sys
 from time import time
 from tqdm import tqdm
 
 ANNOTATION_VERSION = 1
 
 
-@plac.annotations(
-    index=('Elasticsearch index', 'positional', None, str, None, 'INDEX'),
-    model=('Line segmentation model', 'option', 'm', str, None, 'HDF5'),
-    fasttext_model=('Fasttext model', 'option', 'f', str, None, 'BIN'),
-    input_file=('Input annotation file', 'option', 'i', str, None, 'FILE')
-)
-def main(index, model=None, fasttext_model=None, input_file=None):
-
+@click.command()
+@click.argument('index')
+@click.option('-m', '--model', help='Line segmentation model', type=click.Path(exists=True, dir_okay=False))
+@click.option('-f', '--fmodel', help='Fasttext model', type=click.Path(exists=True, dir_okay=False))
+@click.option('-i', '--input-file', help='Input annotation file', type=click.Path(exists=True, dir_okay=False))
+def main(index, model, fasttext_model, input_file):
     if model and not fasttext_model:
-        print('FastText model is required if segmentation model is specified.', file=sys.stderr)
-        exit(1)
+        raise click.UsageError('FastText model is required if segmentation model is specified.')
 
     if not model and not input_file:
-        print('Need to specify either segmentation model or input annotation file.', file=sys.stderr)
-        exit(1)
+        raise click.UsageError('Need to specify either segmentation model or input annotation file.')
 
     start_indexer(index, model, fasttext_model, input_file)
 
 
-def get_es_client():
-    return Elasticsearch(['betaweb015', 'betaweb017', 'betaweb020'],
-                         sniff_on_start=True, sniff_on_connection_fail=True, timeout=360)
-
-
 def start_indexer(index, model, fasttext_model, input_file):
-
-    print('Updating mapping...')
+    click.echo('Updating mapping...', err=True)
     es = get_es_client()
 
     if not es.indices.exists(index=index):
@@ -83,12 +73,12 @@ def start_indexer(index, model, fasttext_model, input_file):
                 ]
     })
 
-    print('Loading SpaCy model...', file=sys.stderr)
+    click.echo('Loading SpaCy model...', err=True)
     nlp = spacy.load('en_core_web_sm')
     nlp.add_pipe(LanguageDetector(), name='language_detector', last=True)
 
     if model and fasttext_model:
-        print('Retrieving initial batch...')
+        click.echo('Retrieving initial batch...', err=True)
         results = es.search(index=index, scroll='60m', size=200, body={
             'sort': ['_id'],
             'query': {
@@ -100,7 +90,7 @@ def start_indexer(index, model, fasttext_model, input_file):
             }
         })
 
-        print('Loading models...', file=sys.stderr)
+        click.echo('Loading models...', err=True)
         load_fasttext_model(fasttext_model)
         model = models.load_model(model)
 
@@ -117,7 +107,7 @@ def start_indexer(index, model, fasttext_model, input_file):
                 results = es.scroll(scroll_id=results['_scroll_id'], scroll='60m')
 
     elif input_file:
-        print('Indexing annotations...')
+        click.echo('Indexing annotations...', err=True)
         helpers.bulk(es, generate_docs([json.loads(l) for l in open(input_file, 'r')], index, nlp=nlp))
 
 
@@ -212,4 +202,4 @@ def generate_docs(batch, index, model=None, nlp=None):
 
 
 if __name__ == '__main__':
-    plac.call(main)
+    main()
