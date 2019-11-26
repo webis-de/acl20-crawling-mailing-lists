@@ -1,9 +1,11 @@
 (() => {
     let abortController = null;
 
-    function labelLines(lines, targetElement) {
+    function labelLines(lines, targetElement, mainContentElement = null) {
         let table = document.createElement('table');
         table.classList.add('labeled-lines');
+        let mainContent = '';
+        let previousLineEmpty = false;
         for (let l in lines) {
             let tr = document.createElement('tr');
             let tdCls = document.createElement('td');
@@ -15,6 +17,16 @@
                 let className = lines[l][1].replace(/_/g, ' ');
                 let classNameClass = lines[l][1].replace(/</g, '').replace(/>/g, '').replace(/_/g, '-');
 
+                if (mainContentElement !== null) {
+                    if (className === 'paragraph') {
+                        mainContent += lines[l][0].trimEnd() + '\n';
+                        previousLineEmpty = false;
+                    } else if (className === '<empty>' && !previousLineEmpty) {
+                        mainContent += '\n';
+                        previousLineEmpty = true;
+                    }
+                }
+
                 tr.classList.add(`line-label-${classNameClass}`);
                 tdCls.appendChild(document.createTextNode(className));
                 tdBody.appendChild(document.createTextNode(lines[l][0]));
@@ -25,6 +37,10 @@
         }
         targetElement.innerHTML = '';
         targetElement.appendChild(table);
+
+        if (mainContentElement !== null) {
+            mainContentElement.innerText = mainContent;
+        }
     }
 
     function reformatMail(text, targetElement, callback = null) {
@@ -72,7 +88,7 @@
     }
 
     function predictLines(messageId, text, targetElement, targetElementForControls,
-                          addShowThreadButtons = false, callback = null) {
+                          addShowThreadButtons = false, mainContentElement = null, callback = null) {
         fetch(API_PREDICT_LINES_URL, {
             method: 'post',
             headers: {'Content-Type': 'text/plain'},
@@ -82,7 +98,7 @@
         }).then(response => {
             return response.json();
         }).then(json => {
-            labelLines(json, targetElement);
+            labelLines(json, targetElement, mainContentElement);
 
             let reformatButton = document.createElement('button');
             reformatButton.innerText = 'Reformat';
@@ -168,10 +184,30 @@
             mailHeaders.appendChild(headerDict2DefList(source['headers']));
             grid.appendChild(mailHeaders);
 
+            let alternateContent = document.createElement('div');
+            alternateContent.classList.add('alternate-content');
+
+            let mainContent = document.createElement('div');
+            mainContent.classList.add('main-content');
+            let h3 = document.createElement('h3');
+            h3.innerText = 'Main Content:';
+            mainContent.appendChild(h3);
+
             let plainTextContainer = document.createElement('div');
             let plainTextControls = document.createElement('div');
             let plainTextBody = document.createElement('pre');
             plainTextBody.classList.add('plaintext-body');
+
+            let mainContentText = document.createElement('div');
+            let mainContentProvided = true;
+            if (source['main_content'] !== undefined && source['main_content'].trim()) {
+                mainContentText.appendChild(document.createTextNode(source['main_content']));
+            } else {
+                mainContentProvided = false;
+                mainContentText.appendChild(document.createTextNode('<no extracted main content>'));
+            }
+            mainContent.appendChild(mainContentText);
+            alternateContent.appendChild(mainContent);
 
             let intersectionObserver = null;
             if (source['text_plain'].trim()) {
@@ -182,7 +218,8 @@
                     // predict lines only when mail contents are within the viewport
                     if (entries[0].isIntersecting) {
                         predictLines(source['headers']['message_id'], source['text_plain'],
-                            plainTextBody, plainTextControls, addShowThreadButtons);
+                            plainTextBody, plainTextControls, addShowThreadButtons,
+                            mainContentProvided ? null : mainContentText);
                         intersectionObserver.disconnect();
                     }
                 }, {
@@ -198,24 +235,6 @@
             plainTextContainer.appendChild(plainTextControls);
             plainTextContainer.appendChild(plainTextBody);
             grid.appendChild(plainTextContainer);
-
-            let alternateContent = document.createElement('div');
-            alternateContent.classList.add('alternate-content');
-
-            let mainContent = document.createElement('div');
-            mainContent.classList.add('main-content');
-            let h3 = document.createElement('h3');
-            h3.innerText = 'Main Content:';
-            mainContent.appendChild(h3);
-
-            let mainContentText = document.createElement('div');
-            if (source['main_content'] !== undefined && source['main_content'].trim()) {
-                mainContentText.appendChild(document.createTextNode(source['main_content']));
-            } else {
-                mainContentText.appendChild(document.createTextNode('<no extracted main content>'));
-            }
-            mainContent.appendChild(mainContentText);
-            alternateContent.appendChild(mainContent);
 
             let html = document.createElement('div');
             html.classList.add('html-body');
