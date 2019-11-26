@@ -1,4 +1,5 @@
 from elasticsearch import Elasticsearch
+from glob import glob
 import pyspark
 import re
 import unicodedata
@@ -18,6 +19,41 @@ def get_spark_context(app_name, job_desc=None):
 def get_es_client():
     return Elasticsearch(['betaweb015', 'betaweb017', 'betaweb020'],
                          sniff_on_start=True, sniff_on_connection_fail=True, timeout=360)
+
+
+def load_arglex(arglex_dir):
+    """
+    Load and parse Arguing Lexicon directory from
+    https://mpqa.cs.pitt.edu/lexicons/arg_lexicon/ (Somasundaran et al., 2007)
+    """
+    files = glob(os.path.join(arglex_dir, '*.tff'))
+    macros = {}
+    rules = []
+
+    for f in files:
+        cls = None
+        for line in open(f, 'r'):
+            line = line.replace("\\'", "'").strip()
+
+            if line.startswith('#class='):
+                cls = line[8:len(line) - 1]
+            elif line.startswith('#'):
+                continue
+            elif line.startswith('@'):
+                m, v = line.split('=', 1)
+                v = v[1:len(v) - 1].replace(', ', '|')
+                macros[m] = v
+            elif line.strip():
+                rules.append((line.strip(), cls))
+
+    rules_expanded = []
+    for line, cls in rules:
+        for m in macros:
+            line = line.replace('({})'.format(m), '({})'.format(macros[m]))
+        if line.strip():
+            rules_expanded.append((line.strip(), cls))
+
+    return rules_expanded
 
 
 def normalize_message_text(text):
