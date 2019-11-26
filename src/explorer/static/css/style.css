@@ -25,6 +25,16 @@
     clear: left;
 }
 
+.main-content {
+    margin-bottom: 3rem;
+    padding-bottom: 3rem;
+    border-bottom: 1px solid rgb(200, 200, 200);
+}
+
+.main-content :not(:first-child) {
+    white-space: pre;
+}
+
 .labeled-lines {
     border: 2px solid transparent;
     padding: .5rem;

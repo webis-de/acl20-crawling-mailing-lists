@@ -199,17 +199,42 @@
             plainTextContainer.appendChild(plainTextBody);
             grid.appendChild(plainTextContainer);
 
+            let alternateContent = document.createElement('div');
+            alternateContent.classList.add('alternate-content');
+
+            let mainContent = document.createElement('div');
+            mainContent.classList.add('main-content');
+            let h3 = document.createElement('h3');
+            h3.innerText = 'Main Content:';
+            mainContent.appendChild(h3);
+
+            let mainContentText = document.createElement('div');
+            if (source['main_content'] !== undefined && source['main_content'].trim()) {
+                mainContentText.appendChild(document.createTextNode(source['main_content']));
+            } else {
+                mainContentText.appendChild(document.createTextNode('<no extracted main content>'));
+            }
+            mainContent.appendChild(mainContentText);
+            alternateContent.appendChild(mainContent);
+
             let html = document.createElement('div');
             html.classList.add('html-body');
 
+            h3 = document.createElement('h3');
+            h3.innerText = 'HTML Content:';
+            html.appendChild(h3);
+
             if (source['text_html'].trim()) {
-                let shadow = html.attachShadow({mode: 'open'});
+                let htmlShadow = document.createElement('div');
+                html.appendChild(htmlShadow);
+                let shadow = htmlShadow.attachShadow({mode: 'open'});
                 shadow.innerHTML = DOMPurify.sanitize(source['text_html']);
             } else {
                 html.appendChild(document.createTextNode('<no html content>'));
                 html.classList.add('no-content');
             }
-            grid.appendChild(html);
+            alternateContent.appendChild(html);
+            grid.appendChild(alternateContent);
 
             let container = document.createElement('div');
             container.classList.add('query-result', 'uk-margin-large-bottom');
