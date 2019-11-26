@@ -22,7 +22,7 @@ from parsing.message_segmenter import load_fasttext_model, predict_raw_text
 from util import util
 
 
-ANNOTATION_VERSION = 4
+ANNOTATION_VERSION = 5
 
 logging.basicConfig(level=os.environ.get('LOGLEVEL', logging.WARN))
 logger = logging.getLogger(__name__)
@@ -66,6 +66,23 @@ def start_indexer(index, segmentation_model, fasttext_model, slices, arg_lexicon
     logger.info('Updating Elasticsearch index mapping...')
     es.indices.put_mapping(index=index, doc_type='message', body={
         'properties': {
+            'main_content': {
+                'type': 'text'
+            },
+            'segments': {
+                'type': 'nested',
+                'properties': {
+                    'label': {
+                        'type': 'keyword'
+                    },
+                    'begin': {
+                        'type': 'integer'
+                    },
+                    'end': {
+                        'type': 'integer'
+                    }
+                }
+            },
             'label_stats': {
                 'properties': {
                     'paragraph_quotation.num_ratio': {'type': 'float'},
@@ -190,7 +207,7 @@ def generate_docs(batch, index, model, nlp=None, arg_lexicon=None, progress_bar=
         logger.debug('Segmenting message...')
         lines = list(predict_raw_text(model, raw_text))
         labels = []
-        start = 0
+        begin = 0
         end = 0
         prev_label = None
         for line in lines:
@@ -202,23 +219,26 @@ def generate_docs(batch, index, model, nlp=None, arg_lexicon=None, progress_bar=
                 prev_label = line[1]
 
             if line[1] != prev_label:
-                labels.append((start, end, prev_label))
-                start = end
+                labels.append((begin, end, prev_label))
+                begin = end
 
             prev_label = line[1]
             end += len(line[0])
-        labels.append((start, end, prev_label))
+        labels.append((begin, end, prev_label))
 
         logger.debug('Calculating segment stats...')
-        message_text = ''
-        for start, end, label in labels:
+        main_content = ''
+        output_doc['segments'] = []
+        for begin, end, label in labels:
             if label == 'paragraph':
-                message_text += raw_text[start:end].strip() + '\n'
+                main_content += raw_text[begin:end].strip() + '\n'
 
             stats[label]['num'] += 1
-            stats[label]['chars'] += end - start
-            stats[label]['lines'] += raw_text[start:end].count('\n')
+            stats[label]['chars'] += end - begin
+            stats[label]['lines'] += raw_text[begin:end].count('\n')
             occurrences[label] += 1
+
+            output_doc['segments'].append({'label': label, 'begin': begin, 'end': end})
 
         for label in stats:
             stats[label]['avg_len'] = stats[label]['chars'] / occurrences[label]
@@ -241,17 +261,18 @@ def generate_docs(batch, index, model, nlp=None, arg_lexicon=None, progress_bar=
             for regex, regex_text, cls in arg_lexicon:
                 if cls in arg_classes:
                     continue
-                if regex.search(message_text) is not None:
+                if regex.search(main_content) is not None:
                     arg_classes[cls] = regex_text
 
             output_doc['arg_classes'] = list(arg_classes.keys())
             output_doc['arg_classes_matched_regex'] = list(arg_classes.values())
 
         # Improve language prediction by making use of content segmentation
-        if len(message_text) > 15:
+        if len(main_content) > 15:
             logger.debug('Detecting language')
-            output_doc['lang'] = nlp(message_text)._.language['language']
+            output_doc['lang'] = nlp(main_content)._.language['language']
 
+        output_doc['main_content'] = main_content
         output_doc['annotation_version'] = ANNOTATION_VERSION
         output_doc['@modified'] = int(time() * 1000)
 
