@@ -2,21 +2,23 @@
 #
 # Index WARC files containing email/newsgroup messages to Elasticsearch.
 
+from functools import partial
+from glob import glob
+import os
+import re
+import sys
+from time import time
+
 import click
 from elasticsearch import helpers
 import email
 import email.utils
-from glob import glob
-from functools import partial
 import pytz
-import os
-import re
 import spacy
 from spacy_langdetect import LanguageDetector
-import sys
-from time import time
-from util.util import decode_message_part, get_es_client, get_spark_context
 from warcio import ArchiveIterator
+
+from util import util
 
 
 @click.command()
@@ -27,8 +29,8 @@ def main(input_dir, index):
 
 
 def start_indexer(input_dir, index):
-    es = get_es_client()
-    sc = get_spark_context('Mail WARC Indexer', 'Mail WARC Indexer for {}'.format(input_dir))
+    es = util.get_es_client()
+    sc = util.get_spark_context('Mail WARC Indexer', 'Mail WARC Indexer for {}'.format(input_dir))
 
     if not es.indices.exists(index=index):
         es.indices.create(index=index, body={
@@ -72,7 +74,7 @@ def index_warc(filename, index, counter):
     try:
         nlp = spacy.load('en_core_web_sm')
         nlp.add_pipe(LanguageDetector(), name='language_detector', last=True)
-        helpers.bulk(get_es_client(), generate_message(index, filename, nlp, counter))
+        helpers.bulk(util.get_es_client(), generate_message(index, filename, nlp, counter))
     except Exception as e:
         print(e, file=sys.stderr)
 
@@ -89,9 +91,9 @@ def generate_message(index, filename, nlp, counter):
             mail = email.message_from_bytes(body)
             doc_id = warc_headers.get_header('WARC-Record-ID')
 
-            mail_text = '\n'.join(decode_message_part(p) for p in mail.walk()
+            mail_text = '\n'.join(util.decode_message_part(p) for p in mail.walk()
                                   if p.get_content_type() == 'text/plain').strip()
-            mail_html = '\n'.join(decode_message_part(p) for p in mail.walk()
+            mail_html = '\n'.join(util.decode_message_part(p) for p in mail.walk()
                                   if p.get_content_type() == 'text/html').strip()
 
             mail_headers = {h.lower(): str(mail[h]) for h in mail}

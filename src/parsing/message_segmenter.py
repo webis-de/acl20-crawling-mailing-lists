@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 
-from util.util import *
+
+from datetime import datetime
+from itertools import chain
+import json
+import os
+import re
 
 import click
-from datetime import datetime
 import fastText
-from itertools import chain
 from tensorflow.keras import callbacks, layers, models
 from tensorflow.keras.utils import Sequence
 import numpy as np
-import json
-import os
+
+from util import util
 
 
 label_map_int = {
@@ -569,7 +572,7 @@ def load_fasttext_model(model_path):
 
 
 def get_word_vectors(text):
-    matrix = [_model.get_word_vector(w) for w in fastText.tokenize(normalize_message_text(text))]
+    matrix = [_model.get_word_vector(w) for w in fastText.tokenize(util.normalize_message_text(text))]
     return np.array(matrix)
 
 

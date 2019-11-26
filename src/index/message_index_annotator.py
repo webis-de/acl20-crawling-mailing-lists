@@ -3,22 +3,24 @@
 # Index Doccano JSON annotations to Elasticsearch.
 # The index is only updated and must exist.
 
-from parsing.message_segmenter import load_fasttext_model, predict_raw_text
-from util import util
-
-import click
-from elasticsearch import helpers
 from collections import defaultdict
-from functools import partial
 import itertools
+from functools import partial
 import logging
 import os
 import re
+from time import time
+
+import click
+from elasticsearch import helpers
 import spacy
 from spacy_langdetect import LanguageDetector
-from tensorflow.python.keras import models
-from time import time
+from tensorflow.keras import models
 from tqdm import tqdm
+
+from parsing.message_segmenter import load_fasttext_model, predict_raw_text
+from util import util
+
 
 ANNOTATION_VERSION = 4
 

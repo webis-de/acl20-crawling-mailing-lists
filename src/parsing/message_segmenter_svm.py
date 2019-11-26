@@ -2,13 +2,15 @@
 # of the 2005 paper "Email Data Cleaning" by Tang et al.
 # For actual message segmentation, use the deep segmenter from message_segmenter.py.
 
-import click
 import json
-import numpy as np
 import os
 import pickle
 import re
+
+import click
+import numpy as np
 from sklearn import svm
+
 
 CONTENT = 0
 HEADER = 1

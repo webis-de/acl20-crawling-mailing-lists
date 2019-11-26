@@ -3,8 +3,10 @@
 # Converter for numeric Doccano labels to text labels. Needed for re-import into Doccano.
 # Adjust the numeric labels in-code according to your Doccano database.
 
-import click
 import json
+
+import click
+
 
 labels_dict = {
     357: "paragraph",

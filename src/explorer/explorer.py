@@ -2,10 +2,12 @@
 
 from elasticsearch import Elasticsearch
 from elasticsearch.exceptions import ConnectionTimeout, RequestError
-from tensorflow.python.keras import models
+from tensorflow.keras import models
 from flask import Flask, abort, jsonify, render_template, request
+
 from parsing.message_segmenter import predict_raw_text, load_fasttext_model, reformat_raw_text_recursive
-import util.util as util
+from util import util
+
 
 app = Flask(__name__)
 app.config.from_object('conf.settings')

@@ -2,10 +2,12 @@
 #
 # Draw a sample of messages from an Elasticsearch index.
 
-import click
-from util.util import normalize_message_text, get_es_client
 import json
+
+import click
 from tqdm import tqdm
+
+from util.util import normalize_message_text, get_es_client
 
 
 @click.command()
