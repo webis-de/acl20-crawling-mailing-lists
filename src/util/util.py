@@ -9,7 +9,6 @@ import pyspark
 
 def get_spark_context(app_name, job_desc=None):
     conf = pyspark.SparkConf()
-    conf.setMaster('yarn')
     conf.setAppName(app_name)
     sc = pyspark.SparkContext(conf=conf)
     sc.setLogLevel('INFO')
