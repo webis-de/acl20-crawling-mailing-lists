@@ -139,7 +139,8 @@ def start_spark_worker(slice_id, max_slices, index, segmentation_model, fasttext
 
     if arg_lexicon:
         logger.info('Compiling arguing lexicon regex list...')
-        arg_lexicon = [(re.compile(regex, re.IGNORECASE), regex, cls) for regex, cls in arg_lexicon]
+        arg_lexicon = [(re.compile(r'\b' + regex + r'\b', re.IGNORECASE), regex, cls)
+                       for regex, cls in arg_lexicon]
 
     logger.info('Retrieving initial batch (slice {}/{})...'.format(slice_id, max_slices))
     es = util.get_es_client()
