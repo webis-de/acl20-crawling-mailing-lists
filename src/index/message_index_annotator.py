@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(os.environ.get('LOGLEVEL', logging.INFO))
 
 
-# noinspection PyIncorrectDocstring,PyUnresolvedReferences
+# noinspection PyIncorrectDocstring
 @click.command()
 @click.argument('index')
 @click.argument('segmentation_model', type=click.Path(exists=True, dir_okay=False))
@@ -37,7 +37,8 @@ logger.setLevel(os.environ.get('LOGLEVEL', logging.INFO))
 @click.option('-s', '--slices', help='Number of Elasticsearch scroll slices', type=int, default=100)
 @click.option('-a', '--arg-lexicon', help='Arguing Lexicon directory (Somasundaran et al., 2007)',
               type=click.Path(exists=True, file_okay=False))
-def main(index, segmentation_model, fasttext_model, slices, arg_lexicon):
+@click.option('-n', '--dry-run', help='Dry run (do not index anything)', is_flag=True)
+def main(*args, **kwargs):
     """
     Automatic message index annotation tool.
 
@@ -50,10 +51,13 @@ def main(index, segmentation_model, fasttext_model, slices, arg_lexicon):
         FASTTEXT_MODEL: pre-trained FastText embedding
     """
 
-    start_indexer(index, segmentation_model, fasttext_model, slices, arg_lexicon)
+    start_indexer(*args, **kwargs)
 
 
-def start_indexer(index, segmentation_model, fasttext_model, slices, arg_lexicon):
+def start_indexer(index, segmentation_model, fasttext_model, slices, arg_lexicon, dry_run=False):
+    if dry_run:
+        logger.warning('Started in dry run mode, nothing will be indexed.')
+
     es = util.get_es_client()
 
     if not es.indices.exists(index=index):
@@ -102,11 +106,12 @@ def start_indexer(index, segmentation_model, fasttext_model, slices, arg_lexicon
         arg_lexicon = util.load_arglex(arg_lexicon)
 
     sc = util.get_spark_context('Mail Annotation Indexer')
-    sc.range(0, slices).foreach(partial(start_spark_worker, max_slices=slices, index=index, model=segmentation_model,
-                                        fasttext_model=fasttext_model, arg_lexicon=arg_lexicon))
+    sc.range(0, slices).foreach(partial(start_spark_worker, max_slices=slices, index=index,
+                                        segmentation_model=segmentation_model, fasttext_model=fasttext_model,
+                                        arg_lexicon=arg_lexicon, dry_run=dry_run))
 
 
-def start_spark_worker(slice_id, max_slices, index, segmentation_model, fasttext_model, arg_lexicon):
+def start_spark_worker(slice_id, max_slices, index, segmentation_model, fasttext_model, arg_lexicon, dry_run=False):
     logger.info('Loading SpaCy...')
     nlp = spacy.load('en_core_web_sm')
     nlp.add_pipe(LanguageDetector(), name='language_detector', last=True)
@@ -142,9 +147,13 @@ def start_spark_worker(slice_id, max_slices, index, segmentation_model, fasttext
         doc_gen = generate_docs(results['hits']['hits'], index=index, model=segmentation_model,
                                 nlp=nlp, arg_lexicon=arg_lexicon, progress_bar=False)
         try:
-            # only start bulk request if generator has at least one element
-            peek = next(doc_gen)
-            helpers.bulk(es, itertools.chain([peek], doc_gen))
+            if dry_run:
+                while True:
+                    next(doc_gen)
+            else:
+                # only start bulk request if generator has at least one element
+                peek = next(doc_gen)
+                helpers.bulk(es, itertools.chain([peek], doc_gen))
             logger.info('Finished indexing batch.')
         except StopIteration:
             pass
