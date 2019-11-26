@@ -22,7 +22,7 @@ from parsing.message_segmenter import load_fasttext_model, predict_raw_text
 from util import util
 
 
-ANNOTATION_VERSION = 5
+ANNOTATION_VERSION = 6
 
 logging.basicConfig(level=os.environ.get('LOGLEVEL', logging.WARN))
 logger = logging.getLogger(__name__)
@@ -231,7 +231,7 @@ def generate_docs(batch, index, model, nlp=None, arg_lexicon=None, progress_bar=
         output_doc['segments'] = []
         for begin, end, label in labels:
             if label == 'paragraph':
-                main_content += raw_text[begin:end].strip() + '\n'
+                main_content += raw_text[begin:end]
 
             stats[label]['num'] += 1
             stats[label]['chars'] += end - begin
@@ -239,6 +239,8 @@ def generate_docs(batch, index, model, nlp=None, arg_lexicon=None, progress_bar=
             occurrences[label] += 1
 
             output_doc['segments'].append({'label': label, 'begin': begin, 'end': end})
+
+        main_content = re.sub(r'\n{3,}', '\n\n', main_content).rstrip()
 
         for label in stats:
             stats[label]['avg_len'] = stats[label]['chars'] / occurrences[label]
