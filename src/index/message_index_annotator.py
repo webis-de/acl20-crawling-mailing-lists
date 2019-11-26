@@ -176,7 +176,7 @@ def generate_docs(batch, index, model, nlp=None, arg_lexicon=None, progress_bar=
         if len(raw_text) > 70000:
             continue
 
-        logger.info('Predicting lines...')
+        logger.debug('Segmenting message...')
         lines = list(predict_raw_text(model, raw_text))
         labels = []
         start = 0
@@ -198,6 +198,7 @@ def generate_docs(batch, index, model, nlp=None, arg_lexicon=None, progress_bar=
             end += len(line[0])
         labels.append((start, end, prev_label))
 
+        logger.debug('Calculating segment stats...')
         message_text = ''
         for start, end, label in labels:
             if label == 'paragraph':
@@ -225,7 +226,7 @@ def generate_docs(batch, index, model, nlp=None, arg_lexicon=None, progress_bar=
         if arg_lexicon:
             arg_classes = {}
 
-            logger.info('Matching against arguing lexicon...')
+            logger.debug('Matching against arguing lexicon...')
             for regex, regex_text, cls in arg_lexicon:
                 if cls in arg_classes:
                     continue
@@ -237,7 +238,7 @@ def generate_docs(batch, index, model, nlp=None, arg_lexicon=None, progress_bar=
 
         # Improve language prediction by making use of content segmentation
         if len(message_text) > 15:
-            logger.info('Detecting language')
+            logger.debug('Detecting language')
             output_doc['lang'] = nlp(message_text)._.language['language']
 
         output_doc['annotation_version'] = ANNOTATION_VERSION
