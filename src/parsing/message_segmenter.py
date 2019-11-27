@@ -4,6 +4,7 @@
 from datetime import datetime
 from itertools import chain
 import json
+import logging
 import os
 import re
 
@@ -15,6 +16,7 @@ import numpy as np
 
 from util import util
 
+logger = logging.getLogger(__name__)
 
 label_map_int = {
     'paragraph': 0,
@@ -73,7 +75,7 @@ def train(fasttext_model, train_data, output, validation_data):
         TRAIN_DATA: input training data as JSON
         OUTPUT: Model output
     """
-    click.echo('Loading FastText model...', err=True)
+    logger.info('Loading FastText model...')
     load_fasttext_model(fasttext_model)
     train_model(train_data, output, validation_data)
 
@@ -93,7 +95,7 @@ def predict(model, fasttext_model, test_data, output_json):
         FASTTEXT_MODEL: pre-trained FastText embedding
         TEST_DATA: test message dump as JSON
     """
-    click.echo('Loading FastText model...', err=True)
+    logger.info('Loading FastText model...')
     load_fasttext_model(fasttext_model)
 
     line_model = models.load_model(model)
@@ -274,7 +276,7 @@ def predict(line_model, input_file, output_json=None):
 
     to_stdout = output_json is None
 
-    click.echo('Predicting {}...'.format(input_file), err=True)
+    logger.info('Predicting {}...'.format(input_file))
     with open(input_file, 'r') as f:
         while True:
             pred_seq = MailLinesSequence(f, labeled=False, batch_size=256, max_lines=1000)
@@ -572,14 +574,24 @@ def load_fasttext_model(model_path):
 
 
 def get_word_vectors(text):
-    matrix = [_model.get_word_vector(w) for w in fastText.tokenize(util.normalize_message_text(text))]
+    try:
+        matrix = [_model.get_word_vector(w) for w in fastText.tokenize(util.normalize_message_text(text))]
+    except Exception as e:
+        logger.error('Failed to tokenize line: {}'.format(e))
+        matrix = [get_word_vector('')]
+
     return np.array(matrix)
 
 
 def get_word_vector(word):
     if _model is None:
         raise RuntimeError("FastText vectors not loaded. Call load_fasttext_model() first.")
-    return _model.get_word_vector(word)
+
+    try:
+        return _model.get_word_vector(word)
+    except Exception as e:
+        logger.error('Failed to obtain word vector: {}'.format(e))
+        return _model.get_word_vector('')
 
 
 if __name__ == '__main__':

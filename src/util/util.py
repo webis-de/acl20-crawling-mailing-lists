@@ -58,6 +58,9 @@ def load_arglex(arglex_dir):
 
 
 def normalize_message_text(text):
+    if type(text) is bytes:
+        text = text.decode('utf-8', 'ignore')
+
     if not text.strip():
         return text
 
