@@ -83,6 +83,13 @@ def generate_message(index, filename, nlp, counter):
     email_regex = re.compile(r'([a-zA-Z0-9_\-./+]+)@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.)|' +
                              r'(([a-zA-Z0-9\-]+\.)+))([a-zA-Z]{2,}|[0-9]{1,3})(\]?)')
 
+    def split_header(header_name, header_dict, split_regex=','):
+        headers = [re.sub(r'\s+', ' ', h).strip()
+                   for h in re.split(split_regex, header_dict.get(header_name, '')) if h.strip()]
+        if not headers:
+            return None
+        return headers if len(headers) > 1 else headers[0]
+
     with open(filename, 'rb') as f:
         iterator = ArchiveIterator(f)
         for record in iterator:
@@ -144,9 +151,10 @@ def generate_message(index, filename, nlp, counter):
                                 'from': from_header,
                                 'from_email': from_email.group(0) if from_email is not None else '',
                                 'subject': mail_headers.get('subject'),
-                                'to': mail_headers.get('to'),
-                                'cc': mail_headers.get('cc'),
-                                'in_reply_to': mail_headers.get('in-reply-to'),
+                                'to': split_header('to', mail_headers),
+                                'cc': split_header('cc', mail_headers),
+                                'in_reply_to': split_header('in-reply-to', mail_headers),
+                                'references': split_header('references', mail_headers, split_regex=r'\s'),
                                 'list_id': mail_headers.get('list-id')
                             },
                             'lang': lang,
