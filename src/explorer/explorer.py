@@ -51,7 +51,8 @@ def reformat_mail():
 def get_thread():
     if not request.args.get('message_id'):
         abort(400, 'Missing message_id')
-    return jsonify(util.retrieve_email_thread(es, app.config.get('ES_INDEX'), request.args.get('message_id')))
+    return jsonify(util.retrieve_email_thread(es, app.config.get('ES_INDEX'), request.args.get('message_id'),
+                   restrict_to_same_group=('multi-group' not in request.args)))
 
 
 @app.errorhandler(400)

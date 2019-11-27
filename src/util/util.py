@@ -100,18 +100,37 @@ def decode_message_part(message_part):
         return message_part.get_payload(decode=True).decode('us-ascii', errors='ignore')
 
 
-def retrieve_email_thread(es, index, message_id):
-    terms = [message_id]
+def get_message_id_prefix(message_id):
+    s = message_id.split('@', maxsplit=1)
+    if len(s) > 1 and s[1].startswith('public.gmane.org'):
+        s_pre = s[0].split('-', maxsplit=1)[0]
+        return s_pre if len(s_pre) > 7 and not s_pre.isdigit() else s[0]
+    return s[0]
+
+
+def retrieve_email_thread(es, index, message_id, restrict_to_same_group=True):
+    def create_should_clause(p):
+        return [
+            {'prefix': {'headers.message_id.keyword': p}},
+            {'prefix': {'headers.in_reply_to.keyword': p}},
+            {'prefix': {'headers.references.keyword': p}}
+        ]
+
     retrieved_ids = set()
+    id_prefix = get_message_id_prefix(message_id)
+
+    must_clause = []
+    must_not_clause = []
+    should_clause = create_should_clause(id_prefix)
     query = {
         'query': {
             'bool': {
                 'filter': {
                     'bool': {
-                        'should': [
-                            {'terms': {'headers.message_id.keyword': terms}},
-                            {'terms': {'headers.in_reply_to.keyword': terms}}
-                        ]
+                        'must': must_clause,
+                        'must_not': must_not_clause,
+                        'should': should_clause,
+                        'minimum_should_match': 1
                     }
                 }
             }
@@ -124,14 +143,19 @@ def retrieve_email_thread(es, index, message_id):
     docs = []
     while True:
         if retrieved_ids:
-            query['query']['bool']['must_not'] = {'terms': {'headers.message_id.keyword': list(retrieved_ids)}}
+            must_clause.clear()
+            must_not_clause.append({'terms': {'headers.message_id.keyword': list(retrieved_ids)}})
 
         results = es.search(index=index, body=query, size=500)
-        if not results['hits']['hits']:
+        hits = results['hits']['hits']
+        if not hits:
             break
 
-        terms_temp = set()
-        for hit in results['hits']['hits']:
+        if not must_clause and restrict_to_same_group:
+            must_clause.append({'term': {'groupname': hits[0]['_source']['groupname']}})
+
+        references = set()
+        for hit in hits:
             docs.append(hit)
             headers = hit['_source']['headers']
 
@@ -139,9 +163,20 @@ def retrieve_email_thread(es, index, message_id):
                 retrieved_ids.add(headers['message_id'])
 
             if headers.get('in_reply_to'):
-                terms_temp.add(headers['in_reply_to'])
+                references.update(headers['in_reply_to']
+                                  if type(headers['in_reply_to']) is list else [headers['in_reply_to']])
 
-        terms.clear()
-        terms.extend(terms_temp - retrieved_ids)
+            if headers.get('references'):
+                references.update(headers['references']
+                                  if type(headers['references']) is list else [headers['references']])
+
+        should_clause.clear()
+        for message_id in (references - retrieved_ids):
+            id_prefix = get_message_id_prefix(message_id)
+            if id_prefix.rstrip():
+                should_clause.extend(create_should_clause(id_prefix.rstrip()))
+
+        if not should_clause:
+            break
 
     return sorted(docs, key=lambda d: d['sort'])
