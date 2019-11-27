@@ -203,6 +203,7 @@ def generate_docs(batch, index, model, nlp=None, arg_lexicon=None, progress_bar=
 
         # Skip overly long texts to avoid running out of memory
         if len(raw_text) > 70000:
+            logger.warning('Skipping overly long message.')
             continue
 
         logger.debug('Segmenting message...')
@@ -242,6 +243,9 @@ def generate_docs(batch, index, model, nlp=None, arg_lexicon=None, progress_bar=
             output_doc['segments'].append({'label': label, 'begin': begin, 'end': end})
 
         main_content = re.sub(r'\n{3,}', '\n\n', main_content).rstrip()
+
+        # Remove any invalid surrogates
+        main_content = main_content.encode('utf-8', 'replace').decode('utf-8')
 
         for label in stats:
             stats[label]['avg_len'] = stats[label]['chars'] / occurrences[label]
