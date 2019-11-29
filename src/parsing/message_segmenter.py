@@ -13,6 +13,7 @@ import fastText
 from tensorflow.keras import backend as K
 from tensorflow.keras import callbacks, layers, metrics, models
 from tensorflow.keras.utils import Sequence
+from tqdm import tqdm
 import numpy as np
 
 from util import util
@@ -133,23 +134,31 @@ def evaluate(model, fasttext_model, eval_data):
     def quotation_accuracy(y_true, y_pred):
         return metrics.binary_accuracy(*binarize_pred_tensors('quotation', y_true, y_pred))
 
-    def paragraph_majority_base_accuracy(y_true, y_pred):
-        y_true = binarize_pred_tensors('paragraph', y_true)
-        return K.maximum(metrics.binary_accuracy(y_true, K.zeros_like(y_true)),
-                         metrics.binary_accuracy(y_true, K.ones_like(y_true)))
+    def raw_code_accuracy(y_true, y_pred):
+        return metrics.binary_accuracy(*binarize_pred_tensors('raw_code', y_true, y_pred))
 
-    def quotation_majority_base_accuracy(y_true, y_pred):
-        y_true = binarize_pred_tensors('quotation', y_true)
-        return K.maximum(metrics.binary_accuracy(y_true, K.zeros_like(y_true)),
-                         metrics.binary_accuracy(y_true, K.ones_like(y_true)))
     segmenter = models.load_model(model)
     segmenter.compile(optimizer=segmenter.optimizer, loss=segmenter.loss,
                       metrics=['categorical_accuracy',
-                               paragraph_accuracy, paragraph_majority_base_accuracy,
-                               quotation_accuracy, quotation_majority_base_accuracy])
+                               paragraph_accuracy, quotation_accuracy, raw_code_accuracy])
 
     logger.info('Evaluating {}...'.format(eval_data.name))
-    eval_seq = MailLinesSequence(eval_data, labeled=True, batch_size=256)
+    batch_size = 256
+    eval_seq = MailLinesSequence(eval_data, labeled=True, batch_size=batch_size)
+
+    cls_sum = np.zeros(len(label_map))
+    for i, (_, labels) in enumerate(tqdm(eval_seq, desc='Counting labels', unit='samples', leave=False)):
+        cls_sum = np.add(cls_sum, np.sum(labels, axis=0))
+        if i == len(eval_seq) - 1:
+            break
+
+    click.echo('Ground-truth class distribution:')
+    cls_sum /= len(eval_seq) * batch_size
+    cls_sum = sorted(enumerate(cls_sum), key=lambda x: x[1], reverse=True)
+    for i, prob in cls_sum:
+        click.echo(' {: >19}: {:.4f}'.format(label_map_inverse[i], prob))
+
+    logger.info('Predicting samples...')
     segmenter.evaluate_generator(eval_seq, verbose=True)
 
 
