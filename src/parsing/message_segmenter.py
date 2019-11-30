@@ -593,9 +593,20 @@ def export_mail_annotation_spans(predictions_softmax, pred_sequence, output_file
         write_annotations(mail_dict, annotations)
 
 
+def get_annotations_from_dict(d):
+    """
+    Get annotations from Doccano either one of the two Doccano export formats.
+    This is a little compatibility hack make both formats work.
+    """
+    if 'annotations' in d:
+        return d['annotations']
+    elif 'labels' in d:
+        return [{'start_offset': a[0], 'end_offset': a[1], 'label': a[2]} for a in d['labels']]
+
+
 def label_lines(doc):
     lines = [l + '\n' for l in doc['text'].split('\n')]
-    annotations = sorted(doc['annotations'], key=lambda a: a['start_offset'], reverse=True)
+    annotations = sorted(get_annotations_from_dict(doc), key=lambda a: a['start_offset'], reverse=True)
     offset = 0
     for l in lines:
         end_offset = offset + len(l)
