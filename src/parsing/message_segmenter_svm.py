@@ -13,6 +13,8 @@ import click
 import numpy as np
 from sklearn import svm
 
+from parsing.message_segmenter import get_annotations_from_dict
+
 
 EMPTY = None
 CONTENT = 0
@@ -82,7 +84,7 @@ def load_mails(input_file):
     unlabeled_mails = []
     for line in open(input_file).readlines():
         mail_json = json.loads(line)
-        if not mail_json['annotations']:
+        if not mail_json.get('annotations') and not mail_json.get('labels'):
             unlabeled_mails.append([l + '\n' for l in mail_json['text'].split('\n')])
             continue
 
@@ -240,7 +242,7 @@ def get_boundary_labels(y, filter_label):
 
 def label_lines(doc):
     lines = [l + '\n' for l in doc['text'].split('\n')]
-    annotations = sorted(doc['annotations'], key=lambda a: a['start_offset'], reverse=True)
+    annotations = sorted(get_annotations_from_dict(doc), key=lambda a: a['start_offset'], reverse=True)
     offset = 0
     for l in lines:
         end_offset = offset + len(l)
