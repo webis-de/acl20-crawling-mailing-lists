@@ -12,6 +12,7 @@ import re
 import click
 import numpy as np
 from sklearn import svm
+from tqdm import tqdm
 
 from parsing.message_segmenter import get_annotations_from_dict
 
@@ -69,14 +70,19 @@ def train(train_data, model_dir):
 @click.argument('model-dir', type=click.Path(exists=True, file_okay=False))
 def predict(test_data, model_dir):
     _, unlabeled_mails = load_mails(test_data)
-    predict_mails(unlabeled_mails, model_dir)
+    list(tqdm(predict_mails(unlabeled_mails, model_dir), desc='Predicting lines'))
 
 @main.command()
 @click.argument('eval-data', type=click.Path(exists=True, dir_okay=False))
 @click.argument('model-dir', type=click.Path(exists=True, file_okay=False))
-def evaluate(eval_data, model_dir):
+@click.option('-v', '--verbose', is_flag=True, help='Show line predictions on STDOUT')
+def evaluate(eval_data, model_dir, verbose):
     labeled_mails, _ = load_mails(eval_data)
-    list(predict_mails(labeled_mails, model_dir))
+    pred_gen = predict_mails(labeled_mails, model_dir, verbose)
+    if not verbose:
+        pred_gen = tqdm(pred_gen,desc='Predicting lines')
+    pred_correct = [p == t for _, p, t in pred_gen]
+    click.echo('Accuracy: {:.4f}'.format(np.average(pred_correct)))
 
 
 def load_mails(input_file):
@@ -135,7 +141,7 @@ def train_clf(labeled_mails, model_dir):
     pickle.dump(clf_code_end, open(os.path.join(model_dir, 'code_end.model'), 'wb'))
 
 
-def predict_mails(mails, model_dir):
+def predict_mails(mails, model_dir, verbose=True):
     clf_header_start = pickle.load(open(os.path.join(model_dir, 'header_start.model'), 'rb'))
     clf_header_end = pickle.load(open(os.path.join(model_dir, 'header_end.model'), 'rb'))
     clf_signature_start = pickle.load(open(os.path.join(model_dir, 'signature_start.model'), 'rb'))
@@ -198,10 +204,12 @@ def predict_mails(mails, model_dir):
                 in_code = False
 
             if truth_exists:
-                click.echo('[ {: >17} ] {}'.format('{} ({})'.format(label_map_inverse[cls], cls == ground_truth), l))
+                if verbose:
+                    click.echo('[ {: >17} ] {}'.format('{} ({})'.format(label_map_inverse[cls], cls == ground_truth), l))
                 yield l, cls, ground_truth
             else:
-                click.echo('[ {: >12} ] {}'.format(label_map_inverse[cls], l))
+                if verbose:
+                    click.echo('[ {: >12} ] {}'.format(label_map_inverse[cls], l))
                 yield l, cls
 
 
