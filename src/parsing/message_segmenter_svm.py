@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+#
 # This file contains legacy code that is mostly meant as a reproduction study
 # of the 2005 paper "Email Data Cleaning" by Tang et al.
 # For actual message segmentation, use the deep segmenter from message_segmenter.py.
@@ -12,30 +14,40 @@ import numpy as np
 from sklearn import svm
 
 
+EMPTY = None
 CONTENT = 0
 HEADER = 1
 SIGNATURE = 2
 CODE = 3
+QUOTATION = 4
 
 label_map = {
+    'paragraph': CONTENT,
     'closing': CONTENT,
     'inline_headers': HEADER,
     'log_data': CONTENT,
     'mua_signature': SIGNATURE,
-    'paragraph': CONTENT,
     'patch': CODE,
     'personal_signature': SIGNATURE,
-    'quotation': CONTENT,
+    'quotation': QUOTATION,
     'quotation_marker': HEADER,
     'raw_code': CODE,
     'salutation': CONTENT,
     'section_heading': CONTENT,
-    'stacktrace': CODE,
     'tabular': CONTENT,
     'technical': CODE,
     'visual_separator': SIGNATURE,
+    '<empty>': EMPTY
 }
 
+label_map_inverse = {
+    CONTENT: 'content',
+    HEADER: 'header',
+    SIGNATURE: 'signature',
+    CODE: 'code',
+    QUOTATION: 'quotation',
+    EMPTY: '<empty>'
+}
 
 @click.group()
 def main():
@@ -55,7 +67,14 @@ def train(train_data, model_dir):
 @click.argument('model-dir', type=click.Path(exists=True, file_okay=False))
 def predict(test_data, model_dir):
     _, unlabeled_mails = load_mails(test_data)
-    predict(unlabeled_mails, model_dir)
+    predict_mails(unlabeled_mails, model_dir)
+
+@main.command()
+@click.argument('eval-data', type=click.Path(exists=True, dir_okay=False))
+@click.argument('model-dir', type=click.Path(exists=True, file_okay=False))
+def evaluate(eval_data, model_dir):
+    labeled_mails, _ = load_mails(eval_data)
+    list(predict_mails(labeled_mails, model_dir))
 
 
 def load_mails(input_file):
@@ -64,18 +83,14 @@ def load_mails(input_file):
     for line in open(input_file).readlines():
         mail_json = json.loads(line)
         if not mail_json['annotations']:
-            unlabeled_mails.append([l for l in mail_json['text'].split('\n') if not check_if_quotation_line(l)])
+            unlabeled_mails.append([l + '\n' for l in mail_json['text'].split('\n')])
             continue
 
-        labeled_mails.append([l for l in label_lines(mail_json) if not check_if_quotation_line(l[0])])
-    click.echo('Labeled:', len(labeled_mails), err=True)
-    click.echo('Unlabeled:', len(unlabeled_mails), err=True)
+        labeled_mails.append(list(label_lines(mail_json)))
+    click.echo('Labeled: {}'.format(len(labeled_mails)), err=True)
+    click.echo('Unlabeled: {}'.format(len(unlabeled_mails)), err=True)
 
     return labeled_mails, unlabeled_mails
-
-
-def check_if_quotation_line(line):
-    return re.match(r'^\s*[>|]', line) is not None
 
 
 def train_clf(labeled_mails, model_dir):
@@ -118,7 +133,7 @@ def train_clf(labeled_mails, model_dir):
     pickle.dump(clf_code_end, open(os.path.join(model_dir, 'code_end.model'), 'wb'))
 
 
-def predict(unlabeled_mails, model_dir):
+def predict_mails(mails, model_dir):
     clf_header_start = pickle.load(open(os.path.join(model_dir, 'header_start.model'), 'rb'))
     clf_header_end = pickle.load(open(os.path.join(model_dir, 'header_end.model'), 'rb'))
     clf_signature_start = pickle.load(open(os.path.join(model_dir, 'signature_start.model'), 'rb'))
@@ -126,7 +141,7 @@ def predict(unlabeled_mails, model_dir):
     clf_code_start = pickle.load(open(os.path.join(model_dir, 'code_start.model'), 'rb'))
     clf_code_end = pickle.load(open(os.path.join(model_dir, 'code_end.model'), 'rb'))
 
-    for mail in unlabeled_mails:
+    for mail in mails:
         X_header, _ = vectorize_lines(mail, vectorize_line_header)
         X_signature, _ = vectorize_lines(mail, vectorize_line_signature)
         X_code, _ = vectorize_lines(mail, vectorize_line_code)
@@ -141,19 +156,24 @@ def predict(unlabeled_mails, model_dir):
         in_header = False
         in_signature = False
         in_code = False
+        ground_truth = None
+        truth_exists = False
         for i, l in enumerate(mail):
-            if y_header_start[i] == 1:
-                in_header = True
+            if type(l) is tuple:
+                truth_exists = True
+                l, ground_truth = l
+
             if y_signature_start[i] == 1:
                 in_signature = True
-            if y_code_start[i] == 1:
-                in_code = True
-
-            if i > 0 and y_header_end[i - 1] == 1:
                 in_header = False
-            if i > 0 and y_signature_end[i - 1] == 1:
+                in_code = False
+            elif y_code_start[i] == 1:
+                in_code = True
+                in_header = False
                 in_signature = False
-            if i > 0 and y_code_end[i - 1] == 1:
+            elif y_header_start[i] == 1:
+                in_header = True
+                in_signature = False
                 in_code = False
 
             cls = CONTENT
@@ -163,9 +183,24 @@ def predict(unlabeled_mails, model_dir):
                 cls = SIGNATURE
             if in_code:
                 cls = CODE
+            if l.lstrip().startswith('>') or l.lstrip().startswith('|'):
+                cls = QUOTATION
+            if not l.strip():
+                cls = EMPTY
 
-            mail[i] = (l, cls)
-            click.echo(mail[i])
+            if y_header_end[i] == 1:
+                in_header = False
+            if y_signature_end[i] == 1:
+                in_signature = False
+            if y_code_end[i] == 1:
+                in_code = False
+
+            if truth_exists:
+                click.echo('[ {: >17} ] {}'.format('{} ({})'.format(label_map_inverse[cls], cls == ground_truth), l))
+                yield l, cls, ground_truth
+            else:
+                click.echo('[ {: >12} ] {}'.format(label_map_inverse[cls], l))
+                yield l, cls
 
 
 def concat_vectors(labeled_mails, callback):
@@ -187,45 +222,43 @@ def concat_vectors(labeled_mails, callback):
 def get_boundary_labels(y, filter_label):
     labels_start = np.zeros(len(y))
     labels_end = np.zeros(len(y))
-    in_header = False
+    in_block = False
     for i, l in enumerate(y):
-        if y[i] == filter_label and not in_header:
+        if y[i] == filter_label and not in_block:
             labels_start[i] = 1
-            in_header = True
-        elif i > 0 and in_header and y[i] != filter_label and y[i - 1] == filter_label:
-            labels_end[i - 1] = 1
+            in_block = True
+        if in_block:
+            j = i + 1
+            while j < len(y) and y[j] == EMPTY:
+                j += 1
+            if j == len(y) or y[j] != filter_label:
+                labels_end[i] = 1
+                in_block = False
 
-        if y[i] != filter_label:
-            in_header = False
     return labels_start, labels_end
 
 
 def label_lines(doc):
-    lines = doc['text'].split('\n')
+    lines = [l + '\n' for l in doc['text'].split('\n')]
     annotations = sorted(doc['annotations'], key=lambda a: a['start_offset'], reverse=True)
     offset = 0
     for l in lines:
-        end_offset = offset + len(l) + 1
+        end_offset = offset + len(l)
 
         if annotations and offset > annotations[-1]['end_offset']:
             annotations.pop()
 
-        # skip annotations which span less than half the line
-        if annotations and annotations[-1]['start_offset'] >= offset and \
-                annotations[-1]['end_offset'] - annotations[-1]['start_offset'] < (end_offset - offset) / 2:
-            annotations.pop()
-
-        if not annotations:
-            yield l, None
+        if not annotations or not l.rstrip():
+            yield l.rstrip(), None
+            offset = end_offset
             continue
 
-        if offset <= annotations[-1]['end_offset'] and end_offset >= annotations[-1]['start_offset']:
-            yield l, label_map[annotations[-1]['label']]
+        if offset < annotations[-1]['end_offset'] and end_offset > annotations[-1]['start_offset']:
+            yield l.rstrip(), label_map[annotations[-1]['label']]
         else:
-            yield l, None
+            yield l.rstrip(), None
 
         offset = end_offset
-
 
 def vectorize_lines(lines, callback):
     vectors = []
@@ -252,8 +285,8 @@ def vectorize_lines(lines, callback):
 
     matrix = np.zeros((len(lines), len(vectors[0]) * 3))
     for i, v in enumerate(vectors):
-        prev_line = vectors[i - 1] if i != 0 else (0,) * len(v)
-        next_line = vectors[i + 1] if i != len(vectors) - 1 else (0,) * len(v)
+        prev_line = vectors[i - 1] if i != 0 else (-1,) * len(v)
+        next_line = vectors[i + 1] if i != len(vectors) - 1 else (-1,) * len(v)
         matrix[i] = prev_line + v + next_line
 
     return matrix, labels
