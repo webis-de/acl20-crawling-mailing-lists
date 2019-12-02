@@ -302,7 +302,7 @@ def train_model(input_file, output_model, validation_input=None):
     tb_callback = callbacks.TensorBoard(log_dir='./data/graph/' + str(datetime.now()), update_freq=1000,
                                         histogram_freq=0, write_grads=True, write_graph=False, write_images=False)
     es_callback = callbacks.EarlyStopping(monitor='val_loss', verbose=1, patience=5)
-    cp_callback = callbacks.ModelCheckpoint(output_model + '.epoch-{epoch:02d}.loss-{val_loss:.2f}.hdf5')
+    cp_callback = callbacks.ModelCheckpoint(output_model + '.epoch-{epoch:02d}.loss-{val_loss:.2f}.h5')
 
     def get_base_line_model():
         line_input = layers.Input(shape=(MAX_LEN, INPUT_DIM))
