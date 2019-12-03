@@ -60,7 +60,10 @@ def main():
 @click.argument('train-data', type=click.Path(exists=True, dir_okay=False))
 @click.argument('output', type=click.Path(exists=False))
 @click.option('-v', '--validation-data', help='Validation Data JSON')
-def train(fasttext_model, train_data, output, validation_data):
+@click.option('-f', '--fine-tune', help='Only fine-tune the given pre-trained model',
+              type=click.Path(exists=True, dir_okay=False))
+@click.option('-t', '--tensorboard', is_flag=True, help='Write Tensorboard output')
+def train(fasttext_model, train_data, output, validation_data, fine_tune, tensorboard):
     """
     Train message segmenter to classify lines of an email or newsgroup message.
 
@@ -71,7 +74,7 @@ def train(fasttext_model, train_data, output, validation_data):
     """
     logger.info('Loading FastText model...')
     load_fasttext_model(fasttext_model)
-    train_model(train_data, output, validation_data)
+    train_model(train_data, output, validation_data, fine_tune, tensorboard)
 
 
 @main.command()
@@ -298,13 +301,14 @@ def pad_2d_sequence(seq, max_len):
     return np.pad(seq, ((0, max(0, max_len - seq.shape[0])), (0, 0)), 'constant')
 
 
-def train_model(input_file, output_model, validation_input=None):
-    tb_callback = callbacks.TensorBoard(log_dir='./data/graph/' + str(datetime.now()), update_freq=1000,
-                                        histogram_freq=0, write_grads=True, write_graph=False, write_images=False)
+def train_model(input_file, output_model, validation_input=None, fine_tune=None, tensorboard=False):
+    tb_callback = callbacks.TensorBoard(log_dir='./data/graph/' + str(datetime.now()), update_freq='batch',
+                                        write_graph=False, write_images=False)
     es_callback = callbacks.EarlyStopping(monitor='val_loss', verbose=1, patience=5)
     cp_callback = callbacks.ModelCheckpoint(output_model + '.epoch-{epoch:02d}.loss-{val_loss:.2f}.h5')
+    cp_callback_no_val = callbacks.ModelCheckpoint(output_model + '.epoch-{epoch:02d}.loss-{loss:.2f}.h5')
 
-    def get_base_line_model():
+    def get_line_model():
         line_input = layers.Input(shape=(MAX_LEN, INPUT_DIM))
         masking = layers.Masking(0)(line_input)
         bi_seq = layers.Bidirectional(layers.GRU(128), merge_mode='sum')(masking)
@@ -325,25 +329,56 @@ def train_model(input_file, output_model, validation_input=None):
         dense = layers.Activation('relu')(dense)
         return context_input, dense
 
-    line_input_cur, line_model_cur = get_base_line_model()
-    line_input_prev, line_model_prev = get_base_line_model()
-    context_input, context_model = get_context_model()
+    def get_base_model():
+        line_input_cur, line_model_cur = get_line_model()
+        line_input_prev, line_model_prev = get_line_model()
+        context_input, context_model = get_context_model()
 
-    concat = layers.concatenate([line_model_cur, line_model_prev, context_model])
-    dropout = layers.Dropout(0.25)(concat)
-    dense_2 = layers.Dense(OUTPUT_DIM)(dropout)
-    output = layers.Activation('softmax')(dense_2)
+        concat = layers.concatenate([line_model_cur, line_model_prev, context_model])
+        dropout = layers.Dropout(0.25)(concat)
+        dense_2 = layers.Dense(OUTPUT_DIM)(dropout)
+        output = layers.Activation('softmax')(dense_2)
 
-    segmenter = models.Model(inputs=[line_input_cur, line_input_prev, context_input], outputs=output)
-    segmenter.compile(optimizer='adam', loss='categorical_hinge',
-                      metrics=['categorical_accuracy'])
+        return models.Model(inputs=[line_input_cur, line_input_prev, context_input], outputs=output)
+
+    if fine_tune is None:
+        segmenter = get_base_model()
+    else:
+        segmenter = models.load_model(fine_tune)
+        logger.info('Freezing layers...')
+        for layer in segmenter.layers[:-1]:
+            layer.trainable = False
+
+    compile_args = {
+        'optimizer': 'adam',
+        'loss': 'categorical_hinge',
+        'metrics': ['categorical_accuracy']
+    }
+
+    effective_callbacks = []
+    if fine_tune is None:
+        effective_callbacks = [es_callback, cp_callback] if validation_input is not None else [cp_callback_no_val]
+    if tensorboard:
+        effective_callbacks.append(tb_callback)
+
+    segmenter.compile(**compile_args)
     segmenter.summary()
 
     train_seq = MailLinesSequence(input_file, labeled=True, batch_size=BATCH_SIZE)
     val_seq = MailLinesSequence(validation_input, labeled=True) if validation_input else None
 
     segmenter.fit_generator(train_seq, epochs=15, validation_data=val_seq, shuffle=True,
-                             max_queue_size=100, callbacks=[tb_callback, es_callback, cp_callback])
+                            max_queue_size=100, callbacks=effective_callbacks)
+
+    if fine_tune is not None:
+        logger.info('Unfreezing layers...')
+        for layer in segmenter.layers:
+            layer.trainable = True
+
+        effective_callbacks.append(cp_callback_no_val)
+        segmenter.compile(**compile_args)
+        segmenter.fit_generator(train_seq, epochs=5, validation_data=val_seq, shuffle=True,
+                                max_queue_size=100, callbacks=effective_callbacks)
 
 
 def predict_raw_text(line_model, email):
