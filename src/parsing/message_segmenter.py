@@ -5,6 +5,7 @@ from datetime import datetime
 from itertools import chain
 import json
 import logging
+import multiprocessing
 import os
 import re
 
@@ -13,6 +14,7 @@ import fastText
 from tensorflow.keras import backend as K
 from tensorflow.keras import callbacks, layers, metrics, models
 from tensorflow.keras.utils import Sequence
+from tensorflow.python.client import device_lib
 from tqdm import tqdm
 import numpy as np
 
@@ -59,11 +61,13 @@ def main():
 @click.argument('fasttext-model', type=click.Path(exists=True, dir_okay=False))
 @click.argument('train-data', type=click.Path(exists=True, dir_okay=False))
 @click.argument('output', type=click.Path(exists=False))
+@click.option('-l', '--loss-function', type=click.Choice(['categorical_crossentropy', 'categorical_hinge']),
+              default='categorical_crossentropy')
 @click.option('-v', '--validation-data', help='Validation Data JSON')
 @click.option('-f', '--fine-tune', help='Only fine-tune the given pre-trained model',
               type=click.Path(exists=True, dir_okay=False))
 @click.option('-t', '--tensorboard', is_flag=True, help='Write Tensorboard output')
-def train(fasttext_model, train_data, output, validation_data, fine_tune, tensorboard):
+def train(fasttext_model, train_data, output, loss_function, validation_data, fine_tune, tensorboard):
     """
     Train message segmenter to classify lines of an email or newsgroup message.
 
@@ -74,7 +78,7 @@ def train(fasttext_model, train_data, output, validation_data, fine_tune, tensor
     """
     logger.info('Loading FastText model...')
     load_fasttext_model(fasttext_model)
-    train_model(train_data, output, validation_data, fine_tune, tensorboard)
+    train_model(train_data, output, loss_function, validation_data, fine_tune, tensorboard)
 
 
 @main.command()
@@ -301,7 +305,8 @@ def pad_2d_sequence(seq, max_len):
     return np.pad(seq, ((0, max(0, max_len - seq.shape[0])), (0, 0)), 'constant')
 
 
-def train_model(input_file, output_model, validation_input=None, fine_tune=None, tensorboard=False):
+def train_model(input_file, output_model, loss='categorical_crossentropy',
+                validation_input=None, fine_tune=None, tensorboard=False):
     tb_callback = callbacks.TensorBoard(log_dir='./data/graph/' + str(datetime.now()), update_freq='batch',
                                         write_graph=False, write_images=False)
     es_callback = callbacks.EarlyStopping(monitor='val_loss', verbose=1, patience=5)
@@ -351,7 +356,7 @@ def train_model(input_file, output_model, validation_input=None, fine_tune=None,
 
     compile_args = {
         'optimizer': 'adam',
-        'loss': 'categorical_hinge',
+        'loss': loss,
         'metrics': ['categorical_accuracy']
     }
 
@@ -367,8 +372,16 @@ def train_model(input_file, output_model, validation_input=None, fine_tune=None,
     train_seq = MailLinesSequence(input_file, labeled=True, batch_size=BATCH_SIZE)
     val_seq = MailLinesSequence(validation_input, labeled=True) if validation_input else None
 
-    segmenter.fit_generator(train_seq, epochs=15, validation_data=val_seq, shuffle=True,
-                            max_queue_size=100, callbacks=effective_callbacks)
+    # use more Sequence queue workers and smaller queue size if running on the GPU
+    if 'GPU' in str(device_lib.list_local_devices()):
+        num_workers = multiprocessing.cpu_count()
+        queue_size = 5
+    else:
+        num_workers = 2
+        queue_size = 200
+
+    segmenter.fit_generator(train_seq, epochs=15, validation_data=val_seq, shuffle=True, use_multiprocessing=True,
+                            workers=num_workers, max_queue_size=queue_size, callbacks=effective_callbacks)
 
     if fine_tune is not None:
         logger.info('Unfreezing layers...')
@@ -377,8 +390,8 @@ def train_model(input_file, output_model, validation_input=None, fine_tune=None,
 
         effective_callbacks.append(cp_callback_no_val)
         segmenter.compile(**compile_args)
-        segmenter.fit_generator(train_seq, epochs=5, validation_data=val_seq, shuffle=True,
-                                max_queue_size=100, callbacks=effective_callbacks)
+        segmenter.fit_generator(train_seq, epochs=5, validation_data=val_seq, shuffle=True, use_multiprocessing=True,
+                                workers=num_workers, max_queue_size=queue_size, callbacks=effective_callbacks)
 
 
 def predict_raw_text(line_model, email):
