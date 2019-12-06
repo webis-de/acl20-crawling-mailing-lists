@@ -612,6 +612,7 @@ def post_process_labels(lines, labels_softmax):
 
 def export_mail_annotation_spans(predictions_softmax, pred_sequence, output_file=None, verbose=True):
     text = ''
+    main_content = ''
     annotations = []
     prev_label = None
     cur_label = '<pad>'
@@ -619,12 +620,15 @@ def export_mail_annotation_spans(predictions_softmax, pred_sequence, output_file
     mail_dict = None
     skip_lines = CONTEXT
 
-    def write_annotations(d, a):
+    def write_annotations(d, a, m=None):
         if not a or 'text' not in d or not d['text']:
             return
 
         d = {k: d[k] for k in d if k != 'id'}
         d.update({'labels': a, 'text': d['text'].lstrip()})
+        if 'meta' not in d:
+            d['meta'] = {}
+        d['meta']['main_content'] = m
 
         json.dump(d, output_file)
         output_file.write('\n')
@@ -647,18 +651,21 @@ def export_mail_annotation_spans(predictions_softmax, pred_sequence, output_file
         cur_offset = len(text) - 1
         text += line
         text = text.lstrip()
+        if cur_label in ['paragraph', 'section_heading']:
+            main_content += line
 
         if i in pred_sequence.mail_end_index_map:
             if output_file:
                 if prev_label not in ['<pad>', '<empty>']:
                     annotations.append((start_offset, cur_offset, prev_label))
-                write_annotations(mail_dict, annotations)
+                write_annotations(mail_dict, annotations, main_content)
 
             mail_dict = None
             annotations.clear()
             start_offset = 0
             prev_label = None
             text = ''
+            main_content = ''
             skip_lines += CONTEXT * 2
             continue
 
@@ -675,7 +682,7 @@ def export_mail_annotation_spans(predictions_softmax, pred_sequence, output_file
     if output_file and mail_dict:
         if cur_label not in ['<empty>', '<pad>']:
             annotations.append((start_offset, len(text) - 1, cur_label))
-        write_annotations(mail_dict, annotations)
+        write_annotations(mail_dict, annotations, main_content)
 
 
 def get_annotations_from_dict(d):
