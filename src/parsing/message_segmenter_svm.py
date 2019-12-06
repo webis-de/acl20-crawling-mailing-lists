@@ -52,6 +52,7 @@ label_map_inverse = {
     EMPTY: '<empty>'
 }
 
+
 @click.group()
 def main():
     pass
@@ -72,17 +73,33 @@ def predict(test_data, model_dir):
     _, unlabeled_mails = load_mails(test_data)
     list(tqdm(predict_mails(unlabeled_mails, model_dir), desc='Predicting lines'))
 
+
 @main.command()
 @click.argument('eval-data', type=click.Path(exists=True, dir_okay=False))
 @click.argument('model-dir', type=click.Path(exists=True, file_okay=False))
 @click.option('-v', '--verbose', is_flag=True, help='Show line predictions on STDOUT')
 def evaluate(eval_data, model_dir, verbose):
-    labeled_mails, _ = load_mails(eval_data)
-    pred_gen = predict_mails(labeled_mails, model_dir, verbose)
+    ground_truth, _ = load_mails(eval_data)
+    pred_gen = predict_mails(ground_truth, model_dir, verbose)
+
     if not verbose:
-        pred_gen = tqdm(pred_gen,desc='Predicting lines')
-    pred_correct = [p == t for _, p, t in pred_gen]
-    click.echo('Accuracy: {:.4f}'.format(np.average(pred_correct)))
+        pred_gen = tqdm(pred_gen, desc='Predicting lines', leave=False)
+
+    pred = np.array([(p[-2] if p[-2] is not None else -1, p[-1] if p[-1] is not None else -1) for p in pred_gen])
+    pred, truth = [np.reshape(a, (a.shape[0],)) for a in np.split(pred, 2, axis=1)]
+
+    click.echo('\nAccuracy: {:.4f}'.format(np.average(pred == truth)))
+
+    click.echo('Quotation Accuracy: {:.4f}'.format(
+        np.average(np.where(pred == QUOTATION, 1, 0) == np.where(truth == QUOTATION, 1, 0))))
+    click.echo('Content Accuracy: {:.4f}'.format(
+        np.average(np.where(pred == CONTENT, 1, 0) == np.where(truth == CONTENT, 1, 0))))
+    click.echo('Header Accuracy: {:.4f}'.format(
+        np.average(np.where(pred == HEADER, 1, 0) == np.where(truth == HEADER, 1, 0))))
+    click.echo('Signature Accuracy: {:.4f}'.format(
+        np.average(np.where(pred == SIGNATURE, 1, 0) == np.where(truth == SIGNATURE, 1, 0))))
+    click.echo('Code Accuracy: {:.4f}'.format(
+        np.average(np.where(pred == CODE, 1, 0) == np.where(truth == CODE, 1, 0))))
 
 
 def load_mails(input_file):
