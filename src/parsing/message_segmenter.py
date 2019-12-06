@@ -47,7 +47,8 @@ label_map_onehot = {label: onehot for label, onehot in zip(label_map, np.eye(len
 
 INPUT_DIM = 100
 OUTPUT_DIM = len(label_map_onehot)
-BATCH_SIZE = 128
+TRAIN_BATCH_SIZE = 128
+INF_BATCH_SIZE = 128
 MAX_LEN = 12
 CONTEXT = 4
 
@@ -104,7 +105,7 @@ def predict(model, fasttext_model, test_data, output_json):
     logger.info('Predicting {}...'.format(test_data.name))
     while True:
         # Do not load more than 1k lines at once
-        pred_seq = MailLinesSequence(test_data, labeled=False, batch_size=256, max_lines=1000)
+        pred_seq = MailLinesSequence(test_data, labeled=False, batch_size=INF_BATCH_SIZE, max_lines=1000)
         if len(pred_seq) == 0:
             break
 
@@ -351,7 +352,8 @@ def train_model(input_file, output_model, loss='categorical_crossentropy',
     else:
         segmenter = models.load_model(fine_tune)
         logger.info('Freezing layers...')
-        for layer in segmenter.layers[:-1]:
+
+        for layer in segmenter.layers[:-2]:
             layer.trainable = False
 
     compile_args = {
@@ -369,8 +371,8 @@ def train_model(input_file, output_model, loss='categorical_crossentropy',
     segmenter.compile(**compile_args)
     segmenter.summary()
 
-    train_seq = MailLinesSequence(input_file, labeled=True, batch_size=BATCH_SIZE)
-    val_seq = MailLinesSequence(validation_input, labeled=True) if validation_input else None
+    train_seq = MailLinesSequence(input_file, labeled=True, batch_size=TRAIN_BATCH_SIZE)
+    val_seq = MailLinesSequence(validation_input, labeled=True, batch_size=INF_BATCH_SIZE) if validation_input else None
 
     # use more Sequence queue workers and smaller queue size if running on the GPU
     if 'GPU' in str(device_lib.list_local_devices()):
@@ -395,7 +397,7 @@ def train_model(input_file, output_model, loss='categorical_crossentropy',
 
 
 def predict_raw_text(line_model, email):
-    pred_seq = MailLinesSequence(email, labeled=False, input_is_raw_text=True)
+    pred_seq = MailLinesSequence(email, labeled=False, input_is_raw_text=True, batch_size=INF_BATCH_SIZE)
     return (pred for i, pred in
             enumerate(post_process_labels(pred_seq.mail_lines, line_model.predict_generator(pred_seq)))
             if CONTEXT <= i < len(pred_seq.mail_lines) - CONTEXT)
@@ -526,7 +528,7 @@ def post_process_labels(lines, labels_softmax):
             continue
 
         # Correct <empty>
-        if line.strip() == '':
+        if line.strip() == '' and label_text != '<empty>':
             label_text = '<empty>'
 
         # Empty lines have to be empty
@@ -541,7 +543,7 @@ def post_process_labels(lines, labels_softmax):
             label_text = prev_l[-1]
 
         # Quotations
-        elif label_text not in ['quotation', 'quotation_marker', 'inline_header'] \
+        elif label_text != 'quotation' \
                 and (line.strip().startswith('>') or line.strip().startswith('|')) \
                 and (label_map['quotation'] in label_argsort[:3] or prev_l[-1] == 'quotation'):
             label_text = 'quotation'
