@@ -11,6 +11,8 @@ import re
 
 import click
 import fastText
+from tensorflow.compat.v1 import ConfigProto
+from tensorflow.compat.v1 import InteractiveSession
 from tensorflow.keras import backend as K
 from tensorflow.keras import callbacks, layers, metrics, models
 from tensorflow.keras.utils import Sequence
@@ -21,6 +23,13 @@ import numpy as np
 from util import util
 
 logger = logging.getLogger(__name__)
+
+# Limit Tensorflow GPU memory
+config = ConfigProto()
+config.gpu_options.per_process_gpu_memory_fraction = 0.2
+config.gpu_options.allow_growth = True
+InteractiveSession(config=config)
+
 
 label_map = {
     'paragraph': 0,
@@ -48,7 +57,7 @@ label_map_onehot = {label: onehot for label, onehot in zip(label_map, np.eye(len
 INPUT_DIM = 100
 OUTPUT_DIM = len(label_map_onehot)
 TRAIN_BATCH_SIZE = 128
-INF_BATCH_SIZE = 128
+INF_BATCH_SIZE = 256
 MAX_LEN = 12
 CONTEXT = 4
 
@@ -102,6 +111,8 @@ def predict(model, fasttext_model, test_data, output_json):
     segmenter = models.load_model(model)
     to_stdout = output_json is None
 
+    num_workers, queue_size = get_data_workers_and_queue_size()
+
     logger.info('Predicting {}...'.format(test_data.name))
     while True:
         # Do not load more than 1k lines at once
@@ -109,8 +120,12 @@ def predict(model, fasttext_model, test_data, output_json):
         if len(pred_seq) == 0:
             break
 
-        predictions = segmenter.predict_generator(
-            pred_seq, verbose=(not to_stdout), steps=(None if not to_stdout else 10))
+        predictions = segmenter.predict_generator(pred_seq,
+                                                  verbose=(not to_stdout),
+                                                  steps=(None if not to_stdout else 10),
+                                                  use_multiprocessing=True,
+                                                  workers=num_workers,
+                                                  max_queue_size=queue_size)
         export_mail_annotation_spans(predictions, pred_seq, output_json, verbose=to_stdout)
 
         if output_json:
@@ -136,19 +151,29 @@ def evaluate(model, fasttext_model, eval_data):
     logger.info('Loading FastText model...')
     load_fasttext_model(fasttext_model)
 
-    def paragraph_accuracy(y_true, y_pred):
-        return metrics.binary_accuracy(*binarize_pred_tensors('paragraph', y_true, y_pred))
-
     def quotation_accuracy(y_true, y_pred):
         return metrics.binary_accuracy(*binarize_pred_tensors('quotation', y_true, y_pred))
 
-    def raw_code_accuracy(y_true, y_pred):
-        return metrics.binary_accuracy(*binarize_pred_tensors('raw_code', y_true, y_pred))
+    def patch_accuracy(y_true, y_pred):
+        return metrics.binary_accuracy(*binarize_pred_tensors('patch', y_true, y_pred))
+
+    def paragraph_accuracy(y_true, y_pred):
+        return metrics.binary_accuracy(*binarize_pred_tensors('paragraph', y_true, y_pred))
+
+    def log_data_accuracy(y_true, y_pred):
+        return metrics.binary_accuracy(*binarize_pred_tensors('log_data', y_true, y_pred))
+
+    def mua_signature_accuracy(y_true, y_pred):
+        return metrics.binary_accuracy(*binarize_pred_tensors('mua_signature', y_true, y_pred))
+
+    def personal_signature_accuracy(y_true, y_pred):
+        return metrics.binary_accuracy(*binarize_pred_tensors('personal_signature', y_true, y_pred))
 
     segmenter = models.load_model(model)
     segmenter.compile(optimizer=segmenter.optimizer, loss=segmenter.loss,
                       metrics=['categorical_accuracy',
-                               paragraph_accuracy, quotation_accuracy, raw_code_accuracy])
+                               quotation_accuracy, patch_accuracy, paragraph_accuracy,
+                               log_data_accuracy, mua_signature_accuracy, personal_signature_accuracy])
 
     logger.info('Evaluating {}...'.format(eval_data.name))
     batch_size = 256
@@ -167,7 +192,9 @@ def evaluate(model, fasttext_model, eval_data):
         click.echo(' {: >19}: {:.4f}'.format(label_map_inverse[i], prob))
 
     logger.info('Predicting samples...')
-    segmenter.evaluate_generator(eval_seq, verbose=True)
+    num_workers, queue_size = get_data_workers_and_queue_size()
+    segmenter.evaluate_generator(eval_seq, verbose=True,
+                                 use_multiprocessing=True, workers=num_workers, max_queue_size=queue_size)
 
 
 class MailLinesSequence(Sequence):
@@ -373,14 +400,7 @@ def train_model(input_file, output_model, loss='categorical_crossentropy',
 
     train_seq = MailLinesSequence(input_file, labeled=True, batch_size=TRAIN_BATCH_SIZE)
     val_seq = MailLinesSequence(validation_input, labeled=True, batch_size=INF_BATCH_SIZE) if validation_input else None
-
-    # use more Sequence queue workers and smaller queue size if running on the GPU
-    if 'GPU' in str(device_lib.list_local_devices()):
-        num_workers = multiprocessing.cpu_count()
-        queue_size = 5
-    else:
-        num_workers = 2
-        queue_size = 200
+    num_workers, queue_size = get_data_workers_and_queue_size()
 
     segmenter.fit_generator(train_seq, epochs=15, validation_data=val_seq, shuffle=True, use_multiprocessing=True,
                             workers=num_workers, max_queue_size=queue_size, callbacks=effective_callbacks)
@@ -394,6 +414,21 @@ def train_model(input_file, output_model, loss='categorical_crossentropy',
         segmenter.compile(**compile_args)
         segmenter.fit_generator(train_seq, epochs=5, validation_data=val_seq, shuffle=True, use_multiprocessing=True,
                                 workers=num_workers, max_queue_size=queue_size, callbacks=effective_callbacks)
+
+
+def get_data_workers_and_queue_size():
+    """
+    Determine number of data loader workers and maximum queue size based on
+    whether we are running on the GPU or CPU.
+    """
+    if 'GPU' in str(device_lib.list_local_devices()):
+        num_workers = multiprocessing.cpu_count()
+        queue_size = 5
+    else:
+        num_workers = 2
+        queue_size = 200
+
+    return num_workers, queue_size
 
 
 def predict_raw_text(line_model, email):
