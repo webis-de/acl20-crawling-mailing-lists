@@ -16,28 +16,35 @@
 
             <div>
                 <div id="query-editor"><textarea rows="25" cols="80">{
+    "sort": ["warc_id"],
+    "size": 100,
     "query": {
         "bool": {
-            "filter": [
-                {
-                    "query_string": {
-                        "query": "groupname:gmane.* AND NOT groupname:(*.patches OR *.commits* OR *.dist-commits* OR *.version-control* OR *.git* OR *.cvs* OR *.svn* OR *.trunk* OR *.scm* OR *.pkg*) AND NOT groupname:(*.bugs* OR *.issues* OR *.bugzilla* OR *.codereview*) AND NOT groupname:(gmane.linux.* OR gmane.os.* OR gmane.comp.*)",
-                        "analyze_wildcard": true
-                    }
-                },
-                {"term": {"lang": "en"}},
-                {"wildcard": {"text_plain": "?*"}},
-                {
-                    "bool": {
-                        "should": [
-                            {"wildcard": {"headers.message_id.keyword": "*"}}
-                        ]
-                    }
+            "filter": {
+                "bool": {
+                    "must_not": [
+                        {
+                            "query_string": {
+                                "analyze_wildcard": true,
+                                "query": "groupname:(*.patches OR *.commits* OR *.dist-commits* OR *.version-control* OR *.git* OR *.cvs* OR *.svn* OR *.trunk* OR *.scm* OR *.pkg*) OR (groupname:(*.bugs* OR *.issues* OR *.bugzilla* OR *.codereview*) OR  headers.subject.keyword:(*jira* OR *bugzilla*) OR headers.from_email.keyword:(*bugs* OR *bugzilla* OR *jira* OR *jboss*))"
+                            }
+                        }
+                    ],
+                    "must": {"term": {"lang": "en"}},
+                    "minimum_should_match": 1,
+                    "should": [
+                        {"wildcard": {"groupname": "gmane.culture.*"}},
+                        {"wildcard": {"groupname": "gmane.politics.*"}},
+                        {"wildcard": {"groupname": "gmane.science.*"}},
+                        {"wildcard": {"groupname": "gmane.education.*"}},
+                        {"wildcard": {"groupname": "gmane.music.*"}},
+                        {"wildcard": {"groupname": "gmane.games.*"}},
+                        {"wildcard": {"groupname": "gmane.recreation.*"}}
+                    ]
                 }
-            ]
+            }
         }
-    },
-    "size": 50
+    }
 }</textarea></div>
             </div>
             <div class="uk-margin">

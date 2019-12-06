@@ -28,61 +28,35 @@ def main(index, output_jsonl, output_text,  total_mails, group_limit, skip, scro
         "query": {
             "bool": {
                 "filter": {
-                    # Skip Gwene
-                    "wildcard": {"groupname": "gmane.*"}
-                },
-                "must_not": [{
-                    # SCM
-                    "query_string": {
-                        "query": "groupname:(*.patches OR *.commits* OR *.dist-commits* OR *.version-control* " +
-                                 "OR *.git* OR *.cvs* OR *.svn* OR *.trunk* OR *.scm* OR *.pkg*)",
-                        "analyze_wildcard": True
+                    "bool": {
+                        "must_not": [
+                            {
+                                "query_string": {
+                                    "analyze_wildcard": True,
+                                    "default_field": "*",
+                                    "query": """groupname:(*.patches OR *.commits* OR
+                                        *.dist-commits* OR *.version-control* OR *.git* OR *.cvs* OR *.svn* OR *.trunk*
+                                        OR *.scm* OR *.pkg*) OR (groupname:(*.bugs* OR *.issues* OR *.bugzilla* OR
+                                        *.codereview*) OR  headers.subject.keyword:(*jira* OR *bugzilla*) OR
+                                        headers.from_email.keyword:(*bugs* OR *bugzilla* OR *jira* OR *jboss*))"""
+                                }
+                            }
+                        ],
+                        "must": {"term": {"lang": "en"}},
+                        "minimum_should_match": 1,
+                        "should": [
+                            {"wildcard": {"groupname": "gmane.culture.*"}},
+                            {"wildcard": {"groupname": "gmane.politics.*"}},
+                            {"wildcard": {"groupname": "gmane.science.*"}},
+                            {"wildcard": {"groupname": "gmane.education.*"}},
+                            {"wildcard": {"groupname": "gmane.music.*"}},
+                            {"wildcard": {"groupname": "gmane.games.*"}},
+                            {"wildcard": {"groupname": "gmane.recreation.*"}}
+                        ]
                     }
-                }, {
-                    # Bugs
-                    "query_string": {
-                        "query": "groupname:(*.bugs* OR *.issues* OR *.bugzilla* OR *.codereview*)",
-                        "analyze_wildcard": True
-                    }
-                }, {
-                    # Comp, Linux, OS, User
-                    "query_string": {
-                        "query": "groupname:(gmane.comp.* OR gmane.linux.* OR gmane.os.* OR *.user)",
-                        "analyze_wildcard": True
-                    }
-                }]
+                }
             }
         }
-
-        # "query": {
-        #     "bool": {
-        #         "must": [{
-        #             "range": {
-        #                 "label_stats.paragraph_quotation.num_ratio": {
-        #                     "gte": 0.8,
-        #                     "lte": 1.2
-        #                 }
-        #             }
-        #         }, {
-        #             "range": {
-        #                 "label_stats.quotation.num": {
-        #                     "gte": 5
-        #                 }
-        #             }
-        #         }, {
-        #             "term": {
-        #                 "lang": {
-        #                     "value": "en"
-        #                 }
-        #             }
-        #         }],
-        #         # "must_not": [{
-        #         #     "wildcard": {
-        #         #         "groupname": "gmane.ietf.*"
-        #         #     }
-        #         # }]
-        #     }
-        # }
     })
 
     if skip > 0:
