@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 
-
+from collections import deque
 from datetime import datetime
-from itertools import chain
 import json
 import logging
 import multiprocessing
@@ -47,8 +46,7 @@ label_map = {
     'tabular': 12,
     'technical': 13,
     'visual_separator': 14,
-    '<empty>': 15,
-    '<pad>': 16
+    '<empty>': 15
 }
 
 label_map_inverse = {label_map[k]: k for k in label_map}
@@ -176,17 +174,14 @@ def evaluate(model, fasttext_model, eval_data):
                                log_data_accuracy, mua_signature_accuracy, personal_signature_accuracy])
 
     logger.info('Evaluating {}...'.format(eval_data.name))
-    batch_size = 256
-    eval_seq = MailLinesSequence(eval_data, labeled=True, batch_size=batch_size)
+    eval_seq = MailLinesSequence(eval_data, labeled=True, batch_size=INF_BATCH_SIZE)
 
     cls_sum = np.zeros(len(label_map))
-    for i, (_, labels) in enumerate(tqdm(eval_seq, desc='Counting labels', unit='samples', leave=False)):
+    for _, labels in tqdm(eval_seq, desc='Counting labels', unit='samples', leave=False):
         cls_sum = np.add(cls_sum, np.sum(labels, axis=0))
-        if i == len(eval_seq) - 1:
-            break
 
     click.echo('Ground-truth class distribution:')
-    cls_sum /= len(eval_seq) * batch_size
+    cls_sum /= len(eval_seq) * INF_BATCH_SIZE
     cls_sum = sorted(enumerate(cls_sum), key=lambda x: x[1], reverse=True)
     for i, prob in cls_sum:
         click.echo(' {: >19}: {:.4f}'.format(label_map_inverse[i], prob))
@@ -202,16 +197,12 @@ class MailLinesSequence(Sequence):
                  input_is_raw_text=False, max_lines=None):
         self.labeled = labeled
         self.mail_lines = []
-        self.mail_start_index_map = {}
-        self.mail_end_index_map = {}
+        self.mail_start_indices = set()
+        self.mail_end_indices = set()
+        self.mail_metadata_map = {}
 
         self.batch_size = batch_size
         self.line_shape = line_shape
-
-        if self.labeled:
-            self.padding_line = [(None, label_map_onehot['<pad>'])]
-        else:
-            self.padding_line = [None]
 
         if not input_is_raw_text:
             if type(input_file) is str:
@@ -222,8 +213,6 @@ class MailLinesSequence(Sequence):
             self._load_raw_text(input_file, max_lines)
 
     def _load_jsonl(self, json_file, max_lines):
-        context_padding = self.padding_line * CONTEXT
-
         for i, json_text in enumerate(json_file):
             mail_json = json.loads(json_text)
 
@@ -239,9 +228,10 @@ class MailLinesSequence(Sequence):
                 continue
 
             if lines:
-                self.mail_start_index_map[len(self.mail_lines) + CONTEXT] = mail_json
-                self.mail_end_index_map[len(self.mail_lines) + CONTEXT + len(lines)] = mail_json
-                self.mail_lines.extend(context_padding + lines + context_padding)
+                self.mail_start_indices.add(len(self.mail_lines))
+                self.mail_metadata_map[len(self.mail_lines)] = mail_json
+                self.mail_lines.extend(lines)
+                self.mail_end_indices.add(len(self.mail_lines))
 
             if max_lines is not None and i >= max_lines:
                 break
@@ -256,8 +246,9 @@ class MailLinesSequence(Sequence):
             lines = [l + '\n' for l in raw_text.split('\n')]
 
         if lines:
-            context_padding = self.padding_line * CONTEXT
-            self.mail_lines.extend(context_padding + lines + context_padding)
+            self.mail_start_indices.add(len(self.mail_lines))
+            self.mail_lines.extend(lines)
+            self.mail_end_indices.add(len(self.mail_lines))
 
         if self.batch_size is None:
             self.batch_size = len(self.mail_lines)
@@ -267,40 +258,52 @@ class MailLinesSequence(Sequence):
 
     def __getitem__(self, index):
         index = index * self.batch_size
+        end_index = index + self.batch_size if self.batch_size is not None else len(self.mail_lines)
+        end_index = min(end_index, len(self.mail_lines))
 
+        padding_line = np.ones(self.line_shape)
         batch = np.empty((self.batch_size,) + self.line_shape)
         batch_prev = np.empty((self.batch_size,) + self.line_shape)
         batch_context = np.empty((self.batch_size, CONTEXT * 2 + 1) + self.line_shape)
         batch_labels = np.empty((self.batch_size, OUTPUT_DIM))
 
-        end_index = index + self.batch_size if self.batch_size is not None else len(self.mail_lines)
+        mail_slice = self.mail_lines[index:end_index]
 
-        padding_lines = self.padding_line * CONTEXT
-        mail_slice = padding_lines + self.mail_lines[index:end_index] + padding_lines
+        def _get_line(line):
+            # Strip labels from line
+            return line if not self.labeled else line[0]
 
         for i, line in enumerate(mail_slice):
-            if i < CONTEXT or i >= len(mail_slice) - CONTEXT:
-                continue
-
             if self.labeled:
-                batch_labels[i - CONTEXT] = line[1]
-                # line_text = line[0] if line[0] is not None else '<PAD>\n'
-                # click.echo('{:>20}    --->    {}'.format(label_map_inverse[np.argmax(line[1])], line_text), end='')
+                batch_labels[i] = line[1]
 
-            line_vecs = []
-            for c in chain(mail_slice[i - CONTEXT:i], [line], mail_slice[i + 1:i + 1 + CONTEXT]):
-                if self.labeled:
-                    c, _ = c    # type: tuple
+            context_lines = deque()
 
-                # Check if this is a padding line
-                if c is None:
-                    line_vecs.append(np.ones(self.line_shape) * -1)
-                else:
-                    line_vecs.append(pad_2d_sequence(get_word_vectors(c), self.line_shape[0]))
+            # Assemble previous context with padding
+            while len(context_lines) < CONTEXT:
+                ci = index + i - len(context_lines) - 1
+                if ci < 0 or ci + 1 in self.mail_start_indices:
+                    context_lines.extendleft([padding_line] * (CONTEXT - len(context_lines)))
+                    break
+                word_vecs = get_word_vectors(_get_line(self.mail_lines[ci]))
+                context_lines.appendleft(pad_2d_sequence(word_vecs, self.line_shape[0]))
 
-            batch[i - CONTEXT] = line_vecs[CONTEXT]
-            batch_prev[i - CONTEXT] = line_vecs[CONTEXT - 1]
-            batch_context[i - CONTEXT] = np.stack(line_vecs)
+            # Add current line to context
+            word_vecs = get_word_vectors(_get_line(line))
+            context_lines.append(pad_2d_sequence(word_vecs, self.line_shape[0]))
+
+            # Assemble following context with padding
+            while len(context_lines) < 2 * CONTEXT + 1:
+                ci = index + i + len(context_lines)
+                if ci >= len(self.mail_lines) or ci in self.mail_end_indices:
+                    context_lines.extend([padding_line] * ((2 * CONTEXT + 1) - len(context_lines)))
+                    break
+                word_vecs = get_word_vectors(_get_line(self.mail_lines[ci]))
+                context_lines.append(pad_2d_sequence(word_vecs, self.line_shape[0]))
+
+            batch[i] = context_lines[CONTEXT]
+            batch_prev[i] = context_lines[CONTEXT - 1]
+            batch_context[i] = np.stack(context_lines)
 
         if self.labeled:
             return [batch, batch_prev, batch_context], batch_labels
@@ -316,15 +319,6 @@ def binarize_pred_tensors(cls, *tensors):
     return [K.cast(K.equal(K.argmax(t, axis=-1), cls), t.dtype) for t in tensors]
 
 
-def binarized_precision(y_true, y_pred, cls='paragraph'):
-    """
-    Accuracy metric measuring only binary accuracy between `cls` labels and 'the rest'.
-    """
-    y_true = K.equal(K.argmax(y_true, axis=-1), label_map[cls])
-    y_pred = K.equal(K.argmax(y_pred, axis=-1), label_map[cls])
-    return K.mean(K.equal(y_true, y_pred))
-
-
 def pad_2d_sequence(seq, max_len):
     if seq.shape[0] > max_len:
         pivot_idx = int(np.ceil(max_len * .75))
@@ -338,8 +332,8 @@ def train_model(input_file, output_model, loss='categorical_crossentropy',
     tb_callback = callbacks.TensorBoard(log_dir='./data/graph/' + str(datetime.now()), update_freq='batch',
                                         write_graph=False, write_images=False)
     es_callback = callbacks.EarlyStopping(monitor='val_loss', verbose=1, patience=5)
-    cp_callback = callbacks.ModelCheckpoint(output_model + '.epoch-{epoch:02d}.loss-{val_loss:.2f}.h5')
-    cp_callback_no_val = callbacks.ModelCheckpoint(output_model + '.epoch-{epoch:02d}.loss-{loss:.2f}.h5')
+    cp_callback = callbacks.ModelCheckpoint(output_model + '.epoch-{epoch:02d}.val_loss-{val_loss:.3f}.h5')
+    cp_callback_no_val = callbacks.ModelCheckpoint(output_model + '.epoch-{epoch:02d}.loss-{loss:.3f}.h5')
 
     def get_line_model():
         line_input = layers.Input(shape=(MAX_LEN, INPUT_DIM))
@@ -369,8 +363,8 @@ def train_model(input_file, output_model, loss='categorical_crossentropy',
 
         concat = layers.concatenate([line_model_cur, line_model_prev, context_model])
         dropout = layers.Dropout(0.25)(concat)
-        dense_2 = layers.Dense(OUTPUT_DIM)(dropout)
-        output = layers.Activation('softmax')(dense_2)
+        dense = layers.Dense(OUTPUT_DIM)(dropout)
+        output = layers.Activation('softmax')(dense)
 
         return models.Model(inputs=[line_input_cur, line_input_prev, context_input], outputs=output)
 
@@ -433,9 +427,7 @@ def get_data_workers_and_queue_size():
 
 def predict_raw_text(line_model, email):
     pred_seq = MailLinesSequence(email, labeled=False, input_is_raw_text=True, batch_size=INF_BATCH_SIZE)
-    return (pred for i, pred in
-            enumerate(post_process_labels(pred_seq.mail_lines, line_model.predict_generator(pred_seq)))
-            if CONTEXT <= i < len(pred_seq.mail_lines) - CONTEXT)
+    return post_process_labels(pred_seq, line_model.predict_generator(pred_seq))
 
 
 def reformat_raw_text_recursive(line_model, email, exclude_classes=None, max_depth=10):
@@ -533,33 +525,35 @@ def reformat_raw_text_recursive(line_model, email, exclude_classes=None, max_dep
     return recurse(email)
 
 
-def post_process_labels(lines, labels_softmax):
-    lines = ([None] * CONTEXT) + lines + ([None] * CONTEXT)
-    sm_pad = np.ones((CONTEXT, OUTPUT_DIM)) * -1
-    labels_softmax = np.concatenate((sm_pad, labels_softmax, sm_pad))
-
+def post_process_labels(mails_sequence, labels_softmax):
+    lines = mails_sequence.mail_lines
     for i, (line, label) in enumerate(zip(lines, labels_softmax)):
-        # Skip padding
-        if i < CONTEXT:
-            continue
-        if i >= len(lines) - CONTEXT:
-            break
-
+        line = line if not mails_sequence.labeled else line[0]
         label_argmax = np.argmax(label)
         label_argsort = np.argsort(label)[::-1]
         label_text = label_map_inverse[label_argmax]
 
-        context = min(3, CONTEXT)
+        prev_l = []
+        for j in range(CONTEXT):
+            if i - j < 0 or i - j + 1 in mails_sequence.mail_start_indices:
+                break
+            prev_l.append(label_map_inverse[np.argmax(labels_softmax[i - j])])
+        prev_l.extend([None] * (CONTEXT - len(prev_l)))
+        prev_l.reverse()
 
-        prev_l = [label_map_inverse[np.argmax(l)] for l in labels_softmax[i - context:i]]
-        next_l = [label_map_inverse[np.argmax(l)] for l in labels_softmax[i + 1:i + 1 + context]]
+        next_l = []
+        for j in range(CONTEXT):
+            if i + 1 + j >= len(lines) or i + 1 + j in mails_sequence.mail_end_indices:
+                break
+            next_l.append(label_map_inverse[np.argmax(labels_softmax[i + 1 + j])])
+        next_l.extend([None] * (CONTEXT - len(next_l)))
 
-        prev_set = set([l for l in prev_l if l not in ['<empty>', '<pad>']])
-        next_set = set([l for l in next_l if l not in ['<empty>', '<pad>']])
+        prev_set_no_blank = set([l for l in prev_l if l not in ['<empty>', None]])
+        next_set_no_blank = set([l for l in next_l if l not in ['<empty>', None]])
 
-        if line is None:
-            yield '<PAD>\n', '<pad>'
-            labels_softmax[i] = label_map_onehot['<pad>']
+        if line is None or label is None:
+            yield '<PAD>\n', None
+            labels_softmax[i] = -1
             continue
 
         # Correct <empty>
@@ -567,14 +561,14 @@ def post_process_labels(lines, labels_softmax):
             label_text = '<empty>'
 
         # Empty lines have to be empty
-        elif (label_text == '<empty>' and line.strip() != '') or label_text == '<pad>':
-            label_text = prev_l[-1] if prev_l[-1] not in ['<empty>', '<pad>'] else 'paragraph'
+        elif label_text == '<empty>' and line.strip() != '':
+            label_text = prev_l[-1] if prev_l[-1] not in ['<empty>', None] else 'paragraph'
 
         # Bleeding quotations
         elif label_text == 'quotation' and prev_l[-1] == 'quotation' \
                 and lines[i - 1].strip() and lines[i - 1].strip() \
                 and next_l[0] != 'quotation' and lines[i - 1].strip()[0] != line.strip()[0] \
-                and prev_l[-1] not in ['<empty>', '<pad>']:
+                and prev_l[-1] not in ['<empty>', None]:
             label_text = prev_l[-1]
 
         # Quotations
@@ -584,7 +578,7 @@ def post_process_labels(lines, labels_softmax):
             label_text = 'quotation'
 
         # Quotation markers
-        elif label_text == 'quotation' and prev_l[-1] in ['<empty>', '<pad>'] \
+        elif label_text == 'quotation' and prev_l[-1] in ['<empty>', None] \
                 and label_map['quotation_marker'] in label_argsort[:3]:
             label_text = 'quotation_marker'
 
@@ -594,16 +588,16 @@ def post_process_labels(lines, labels_softmax):
             label_text = prev_l[-1]
 
         # Interrupted long blocks
-        elif len(prev_set) == 1 and label_text != [*prev_set][0] and [*prev_set][0] in next_set \
-                and [*prev_set][0] in ['mua_signature', 'personal_signature',
+        elif len(prev_set_no_blank) == 1 and label_text != [*prev_set_no_blank][0] and [*prev_set_no_blank][0] in next_set_no_blank \
+                and [*prev_set_no_blank][0] in ['mua_signature', 'personal_signature',
                                        'patch', 'code', 'tabular', 'technical'] \
-                and label_map[[*prev_set][0]] == label_argsort[1]:
-            label_text = [*prev_set][0]
+                and label_map[[*prev_set_no_blank][0]] == label_argsort[1]:
+            label_text = [*prev_set_no_blank][0]
 
         # Interrupting stray classes
         elif label_text in ['technical', 'mua_signature', 'personal_signature', 'patch', 'tabular'] \
-                and prev_l[-1] != label_text and prev_l[-1] not in ['<pad>', '<empty>'] \
-                and (next_l[0] == prev_l[-1] or (next_l[1] == prev_l[-1] and next_l[0] == '<empty>')):
+                and prev_l[-1] != label_text and prev_l[-1] not in ['<empty>', None] \
+                and (next_l[0] == prev_l[-1] or (next_l[1] == prev_l[-1] and next_l[0] in ['<empty>', None])):
             label_text = prev_l[-1]
 
         labels_softmax[i] = label_map_onehot[label_text]
@@ -615,10 +609,9 @@ def export_mail_annotation_spans(predictions_softmax, pred_sequence, output_file
     main_content = ''
     annotations = []
     prev_label = None
-    cur_label = '<pad>'
+    cur_label = None
     start_offset = 0
     mail_dict = None
-    skip_lines = CONTEXT
 
     def write_annotations(d, a, m=None):
         if not a or 'text' not in d or not d['text']:
@@ -633,20 +626,15 @@ def export_mail_annotation_spans(predictions_softmax, pred_sequence, output_file
         json.dump(d, output_file)
         output_file.write('\n')
 
-    for i, (line, label_text) in enumerate(post_process_labels(pred_sequence.mail_lines, predictions_softmax)):
-        # Skip padding
-        if i < skip_lines:
-            continue
-        skip_lines = i
-
+    for i, (line, label_text) in enumerate(post_process_labels(pred_sequence, predictions_softmax)):
         cur_label = label_text
         if prev_label is None:
             prev_label = cur_label
 
-        if i in pred_sequence.mail_start_index_map:
+        if i in pred_sequence.mail_start_indices:
             if verbose:
                 click.echo(' {0:>>20}    --->    <<< MAIL START >>>'.format(''))
-            mail_dict = pred_sequence.mail_start_index_map[i]
+            mail_dict = pred_sequence.mail_metadata_map.get(i, {})
 
         cur_offset = len(text) - 1
         text += line
@@ -654,9 +642,9 @@ def export_mail_annotation_spans(predictions_softmax, pred_sequence, output_file
         if cur_label in ['paragraph', 'section_heading']:
             main_content += line
 
-        if i in pred_sequence.mail_end_index_map:
+        if i in pred_sequence.mail_end_indices:
             if output_file:
-                if prev_label not in ['<pad>', '<empty>']:
+                if prev_label not in [None, '<empty>']:
                     annotations.append((start_offset, cur_offset, prev_label))
                 write_annotations(mail_dict, annotations, main_content)
 
@@ -666,21 +654,20 @@ def export_mail_annotation_spans(predictions_softmax, pred_sequence, output_file
             prev_label = None
             text = ''
             main_content = ''
-            skip_lines += CONTEXT * 2
             continue
 
         if verbose:
             click.echo(' {:>20}    --->    {}'.format(label_text, line), nl=False)
 
         if cur_label != prev_label:
-            if output_file and prev_label not in ['<pad>', '<empty>']:
+            if output_file and prev_label not in [None, '<empty>']:
                 annotations.append((start_offset, cur_offset, prev_label))
 
             start_offset = cur_offset + 1
             prev_label = cur_label
 
     if output_file and mail_dict:
-        if cur_label not in ['<empty>', '<pad>']:
+        if cur_label not in ['<empty>', None]:
             annotations.append((start_offset, len(text) - 1, cur_label))
         write_annotations(mail_dict, annotations, main_content)
 
@@ -733,6 +720,9 @@ def get_word_vectors(text):
         matrix = [_model.get_word_vector(w) for w in fastText.tokenize(util.normalize_message_text(text))]
     except Exception as e:
         logger.error('Failed to tokenize line: {}'.format(e))
+        matrix = [get_word_vector('')]
+
+    if len(matrix) == 0:
         matrix = [get_word_vector('')]
 
     return np.array(matrix)
