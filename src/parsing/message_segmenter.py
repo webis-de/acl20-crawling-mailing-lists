@@ -548,8 +548,9 @@ def post_process_labels(mails_sequence, labels_softmax):
             next_l.append(label_map_inverse[np.argmax(labels_softmax[i + 1 + j])])
         next_l.extend([None] * (CONTEXT - len(next_l)))
 
-        prev_set_no_blank = set([l for l in prev_l if l not in ['<empty>', None]])
-        next_set_no_blank = set([l for l in next_l if l not in ['<empty>', None]])
+        empty_classes = ['<empty>', 'visual_separator', None]
+        prev_set_no_blank = set([l for l in prev_l if l not in empty_classes])
+        next_set_no_blank = set([l for l in next_l if l not in empty_classes])
 
         if line is None or label is None:
             yield '<PAD>\n', None
@@ -562,13 +563,13 @@ def post_process_labels(mails_sequence, labels_softmax):
 
         # Empty lines have to be empty
         elif label_text == '<empty>' and line.strip() != '':
-            label_text = prev_l[-1] if prev_l[-1] not in ['<empty>', None] else 'paragraph'
+            label_text = prev_l[-1] if prev_l[-1] not in empty_classes else 'paragraph'
 
         # Bleeding quotations
         elif label_text == 'quotation' and prev_l[-1] == 'quotation' \
                 and lines[i - 1].strip() and lines[i - 1].strip() \
                 and next_l[0] != 'quotation' and lines[i - 1].strip()[0] != line.strip()[0] \
-                and prev_l[-1] not in ['<empty>', None]:
+                and prev_l[-1] not in empty_classes:
             label_text = prev_l[-1]
 
         # Quotations
@@ -578,7 +579,7 @@ def post_process_labels(mails_sequence, labels_softmax):
             label_text = 'quotation'
 
         # Quotation markers
-        elif label_text == 'quotation' and prev_l[-1] in ['<empty>', None] \
+        elif label_text == 'quotation' and prev_l[-1] in empty_classes \
                 and label_map['quotation_marker'] in label_argsort[:3]:
             label_text = 'quotation_marker'
 
@@ -588,16 +589,17 @@ def post_process_labels(mails_sequence, labels_softmax):
             label_text = prev_l[-1]
 
         # Interrupted long blocks
-        elif len(prev_set_no_blank) == 1 and label_text != [*prev_set_no_blank][0] and [*prev_set_no_blank][0] in next_set_no_blank \
+        elif len(prev_set_no_blank) == 1 and label_text != [*prev_set_no_blank][0] and \
+                [*prev_set_no_blank][0] in next_set_no_blank \
                 and [*prev_set_no_blank][0] in ['mua_signature', 'personal_signature',
-                                       'patch', 'code', 'tabular', 'technical'] \
+                                                'patch', 'code', 'tabular', 'technical'] \
                 and label_map[[*prev_set_no_blank][0]] == label_argsort[1]:
             label_text = [*prev_set_no_blank][0]
 
         # Interrupting stray classes
         elif label_text in ['technical', 'mua_signature', 'personal_signature', 'patch', 'tabular'] \
-                and prev_l[-1] != label_text and prev_l[-1] not in ['<empty>', None] \
-                and (next_l[0] == prev_l[-1] or (next_l[1] == prev_l[-1] and next_l[0] in ['<empty>', None])):
+                and prev_l[-1] != label_text and prev_l[-1] not in empty_classes \
+                and (next_l[0] == prev_l[-1] or (next_l[1] == prev_l[-1] and next_l[0] in empty_classes)):
             label_text = prev_l[-1]
 
         labels_softmax[i] = label_map_onehot[label_text]
