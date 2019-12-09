@@ -348,7 +348,7 @@ def train_model(input_file, output_model, loss='categorical_crossentropy',
         conv2d = layers.Conv2D(128, (4, 4))(context_input)
         conv2d = layers.BatchNormalization()(conv2d)
         conv2d = layers.Activation('relu')(conv2d)
-        conv2d = layers.Conv2D(256, (3, 3))(conv2d)
+        conv2d = layers.Conv2D(128, (3, 3))(conv2d)
         conv2d = layers.Activation('relu')(conv2d)
         conv2d = layers.MaxPooling2D(2)(conv2d)
         flatten = layers.Flatten()(conv2d)
@@ -362,7 +362,7 @@ def train_model(input_file, output_model, loss='categorical_crossentropy',
         context_input, context_model = get_context_model()
 
         concat = layers.concatenate([line_model_cur, line_model_prev, context_model])
-        dropout = layers.Dropout(0.5)(concat)
+        dropout = layers.Dropout(0.25)(concat)
         dense = layers.Dense(OUTPUT_DIM)(dropout)
         output = layers.Activation('softmax')(dense)
 
@@ -396,7 +396,7 @@ def train_model(input_file, output_model, loss='categorical_crossentropy',
     val_seq = MailLinesSequence(validation_input, labeled=True, batch_size=INF_BATCH_SIZE) if validation_input else None
     num_workers, queue_size = get_data_workers_and_queue_size()
 
-    segmenter.fit_generator(train_seq, epochs=15, validation_data=val_seq, shuffle=True, use_multiprocessing=True,
+    segmenter.fit_generator(train_seq, epochs=20, validation_data=val_seq, shuffle=True, use_multiprocessing=True,
                             workers=num_workers, max_queue_size=queue_size, callbacks=effective_callbacks)
 
     if fine_tune is not None:
