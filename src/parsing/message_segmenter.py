@@ -558,12 +558,16 @@ def post_process_labels(mails_sequence, labels_softmax):
             continue
 
         # Correct <empty>
-        if line.strip() == '' and label_text != '<empty>':
+        if line.strip() == '':
             label_text = '<empty>'
 
         # Empty lines have to be empty
         elif label_text == '<empty>' and line.strip() != '':
             label_text = prev_l[-1] if prev_l[-1] not in empty_classes else 'paragraph'
+
+        elif label_text == 'visual_separator':
+            # Never change separators
+            pass
 
         # Bleeding quotations
         elif label_text == 'quotation' and prev_l[-1] == 'quotation' \
