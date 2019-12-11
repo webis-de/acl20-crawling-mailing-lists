@@ -80,13 +80,13 @@ def main(index, output_file, **kwargs):
             }
         }
 
-    logger.info('Retrieving initial batch...')
+    logger.info('Retrieving initial batch')
     es = get_es_client()
     results = es.search(index=index, scroll='10m', size=kwargs['scroll_size'], body=query)
 
     skip = kwargs['skip']
     if skip > 0:
-        logger.info('Skipping ahead {} messages...'.format(skip))
+        logger.info('Skipping ahead {} messages'.format(skip))
 
     sampled_groups = {}
     num_samples = 0

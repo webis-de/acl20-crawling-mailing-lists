@@ -72,7 +72,7 @@ def start_indexer(index, segmentation_model, fasttext_model, slices=1, **kwargs)
     if not es.indices.exists(index=index):
         raise RuntimeError('Index has to exist.')
 
-    logger.info('Updating Elasticsearch index mapping...')
+    logger.info('Updating Elasticsearch index mapping')
     es.indices.put_mapping(index=index, doc_type='message', body={
         'properties': {
             'main_content': {
@@ -131,7 +131,7 @@ def start_indexer(index, segmentation_model, fasttext_model, slices=1, **kwargs)
     })
 
     if kwargs.get('arg_lexicon'):
-        logger.info('Loading Arguing Lexicon...')
+        logger.info('Loading Arguing Lexicon')
         kwargs['arg_lexicon'] = util.load_arglex(kwargs.get('arg_lexicon'))
 
     sc = util.get_spark_context('Mail Annotation Indexer')
@@ -141,17 +141,17 @@ def start_indexer(index, segmentation_model, fasttext_model, slices=1, **kwargs)
 
 
 def _start_spark_worker(slice_id, index, segmentation_model, fasttext_model, max_slices=1, **kwargs):
-    logger.info('Loading SpaCy...')
+    logger.info('Loading SpaCy')
     nlp = spacy.load('en_core_web_sm')
     nlp.add_pipe(LanguageDetector(), name='language_detector', last=True)
 
-    logger.info('Loading segmentation model...')
+    logger.info('Loading segmentation model')
     load_fasttext_model(fasttext_model)
     segmentation_model = models.load_model(segmentation_model)
 
     arg_lexicon = kwargs.get('arg_lexicon')
     if arg_lexicon:
-        logger.info('Compiling arguing lexicon regex list...')
+        logger.info('Compiling arguing lexicon regex list')
         arg_lexicon = [(re.compile(r'\b' + regex + r'\b', re.IGNORECASE), regex, cls)
                        for regex, cls in arg_lexicon]
 
@@ -160,7 +160,7 @@ def _start_spark_worker(slice_id, index, segmentation_model, fasttext_model, max
         for path in kwargs.get('args_topic_models'):
             topic_models.append(ESA(path))
 
-    logger.info('Retrieving initial batch (slice {}/{})...'.format(slice_id, max_slices))
+    logger.info('Retrieving initial batch (slice {}/{})'.format(slice_id, max_slices))
     es = util.get_es_client()
     results = es.search(index=index, scroll='35m', size=250, body={
         'sort': ['_id'],
@@ -194,7 +194,7 @@ def _start_spark_worker(slice_id, index, segmentation_model, fasttext_model, max
         except StopIteration:
             pass
 
-        logger.info('Retrieving next batch (slice {}/{})...'.format(slice_id, max_slices))
+        logger.info('Retrieving next batch (slice {}/{})'.format(slice_id, max_slices))
         results = es.scroll(scroll_id=results['_scroll_id'], scroll='35m')
 
 
@@ -237,7 +237,7 @@ def _generate_docs(batch, index, segmentation_model, nlp, **kwargs):
             logger.warning('Skipping overly long message.')
             continue
 
-        logger.debug('Segmenting message...')
+        logger.debug('Segmenting message')
         lines = list(predict_raw_text(segmentation_model, raw_text))
         labels = []
         begin = 0
@@ -259,7 +259,7 @@ def _generate_docs(batch, index, segmentation_model, nlp, **kwargs):
             end += len(line[0])
         labels.append((begin, end, prev_label))
 
-        logger.debug('Calculating segment stats...')
+        logger.debug('Calculating segment stats')
         main_content = ''
         output_doc['segments'] = []
         for begin, end, label in labels:
@@ -295,7 +295,7 @@ def _generate_docs(batch, index, segmentation_model, nlp, **kwargs):
         if kwargs.get('arg_lexicon'):
             arg_classes = {}
 
-            logger.debug('Matching against arguing lexicon...')
+            logger.debug('Matching against arguing lexicon')
             for regex, regex_text, cls in kwargs.get('arg_lexicon'):
                 if cls in arg_classes:
                     continue

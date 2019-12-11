@@ -72,15 +72,15 @@ def index_directory(input_dir, index):
 
     counter = sc.accumulator(0)
 
-    logger.info("Listing group directories...")
+    logger.info("Listing group directories")
     group_dirs = glob(os.path.join(input_dir, 'gmane.*'))
     group_dirs = sc.parallelize(group_dirs, len(group_dirs) // 5)
 
-    logger.info('Listing WARCS...')
+    logger.info('Listing WARCS')
     warcs = group_dirs.flatMap(lambda d: glob(os.path.join(d, '*.warc.gz')))
     warcs.cache()
 
-    logger.info('Indexing messages...')
+    logger.info('Indexing messages')
     warcs.foreach(partial(_index_warc, index=index, counter=counter))
 
 
