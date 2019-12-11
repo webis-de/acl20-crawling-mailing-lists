@@ -3,8 +3,6 @@
 from collections import defaultdict
 import itertools
 from functools import partial
-import logging
-import os
 import re
 from time import time
 
@@ -22,12 +20,9 @@ from util import util
 
 ANNOTATION_VERSION = 8
 
-logging.basicConfig(level=os.environ.get('LOGLEVEL', logging.WARN))
-logger = logging.getLogger(__name__)
-logger.setLevel(os.environ.get('LOGLEVEL', logging.INFO))
+logger = util.get_logger(__name__)
 
 
-# noinspection PyIncorrectDocstring
 @click.command()
 @click.argument('index')
 @click.argument('segmentation_model', type=click.Path(exists=True, dir_okay=False))
@@ -37,7 +32,7 @@ logger.setLevel(os.environ.get('LOGLEVEL', logging.INFO))
               type=click.Path(exists=True, file_okay=False))
 @click.option('-t', '--args-topic-model', multiple=True, type=click.Path(exists=True, dir_okay=False))
 @click.option('-n', '--dry-run', help='Dry run (do not index anything)', is_flag=True)
-def main(**kwargs):
+def main(index, segmentation_model, fasttext_model, **kwargs):
     """
     Automatic message index annotation tool.
 
@@ -45,12 +40,12 @@ def main(**kwargs):
     analyzing them, and updating the index documents with the generated annotations.
 
     Arguments:
-        INDEX: the Elasticsearch index
-        SEGMENTATION_MODEL: pre-trained HDF5 email segmentation model
-        FASTTEXT_MODEL: pre-trained FastText embedding
+        index: the Elasticsearch index
+        segmentation_model: pre-trained HDF5 email segmentation model
+        fasttext_model: pre-trained FastText embedding
     """
 
-    start_indexer(**kwargs)
+    start_indexer(index, segmentation_model, fasttext_model, **kwargs)
 
 
 def start_indexer(index, segmentation_model, fasttext_model, slices=1, **kwargs):
@@ -211,6 +206,7 @@ def _generate_docs(batch, index, segmentation_model, nlp, **kwargs):
     :param index: Elasticsearch index
     :param segmentation_model: Email segmentation model
     :param nlp: SpaCy language model
+    :return: Generator of index doc actions
 
     Keyword Args:
         See :func:`_start_spark_worker`

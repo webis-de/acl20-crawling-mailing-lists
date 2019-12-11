@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
-#
-# Index WARC files containing email/newsgroup messages to Elasticsearch.
 
 from functools import partial
 from glob import glob
 import os
 import re
-import sys
 from time import time
 
 import click
@@ -21,14 +18,31 @@ from warcio import ArchiveIterator
 from util import util
 
 
+logger = util.get_logger(__name__)
+
+
 @click.command()
 @click.argument('input-dir', type=click.Path(exists=True, file_okay=False))
 @click.argument('index')
 def main(input_dir, index):
-    start_indexer(input_dir, index)
+    """
+    Index WARC files containing email/newsgroup messages to Elasticsearch.
+
+    Arguments:
+        input_dir: input directory containing raw WARC files
+        index: Elasticsearch index
+    """
+    index_directory(input_dir, index)
 
 
-def start_indexer(input_dir, index):
+def index_directory(input_dir, index):
+    """
+    Index WARC files from the given directory.
+
+    :param input_dir: input directory containing raw WARC files
+    :param index: Elasticsearch index
+    """
+
     es = util.get_es_client()
     sc = util.get_spark_context('Mail WARC Indexer', 'Mail WARC Indexer for {}'.format(input_dir))
 
@@ -58,28 +72,44 @@ def start_indexer(input_dir, index):
 
     counter = sc.accumulator(0)
 
-    print("Listing group directories...", file=sys.stderr)
+    logger.info("Listing group directories...")
     group_dirs = glob(os.path.join(input_dir, 'gmane.*'))
     group_dirs = sc.parallelize(group_dirs, len(group_dirs) // 5)
 
-    print('Listing WARCS...', file=sys.stderr)
+    logger.info('Listing WARCS...')
     warcs = group_dirs.flatMap(lambda d: glob(os.path.join(d, '*.warc.gz')))
     warcs.cache()
 
-    print('Indexing messages...', file=sys.stderr)
-    warcs.foreach(partial(index_warc, index=index, counter=counter))
+    logger.info('Indexing messages...')
+    warcs.foreach(partial(_index_warc, index=index, counter=counter))
 
 
-def index_warc(filename, index, counter):
+def _index_warc(filename, index, counter):
+    """
+    Index individual WARC file.
+
+    :param filename: WARC file name
+    :param index: Elasticsearch index
+    :param counter: Spark counter
+    """
     try:
         nlp = spacy.load('en_core_web_sm')
         nlp.add_pipe(LanguageDetector(), name='language_detector', last=True)
-        helpers.bulk(util.get_es_client(), generate_message(index, filename, nlp, counter))
+        helpers.bulk(util.get_es_client(), _generate_docs(index, filename, nlp, counter))
     except Exception as e:
-        print(e, file=sys.stderr)
+        logger.error(e)
 
 
-def generate_message(index, filename, nlp, counter):
+def _generate_docs(index, filename, nlp, counter):
+    """
+    Generate Elasticsearch index docs.
+
+    :param index: Elasticsearch index
+    :param filename: WARC file name
+    :param nlp: SpaCy language model
+    :param counter: Spark counter
+    :return: Generator of index doc actions
+    """
     email_regex = re.compile(r'([a-zA-Z0-9_\-./+]+)@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.)|' +
                              r'(([a-zA-Z0-9\-]+\.)+))([a-zA-Z]{2,}|[0-9]{1,3})(\]?)')
 
@@ -119,7 +149,7 @@ def generate_message(index, filename, nlp, counter):
                 lang = nlp(mail_text[:nlp.max_length])._.language['language']
             except Exception as e:
                 lang = 'UNKNOWN'
-                print(e, file=sys.stderr)
+                logger.error(e)
 
             counter.add(1)
 

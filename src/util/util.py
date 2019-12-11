@@ -1,4 +1,5 @@
 from glob import glob
+import logging
 import os
 import re
 import unicodedata
@@ -7,7 +8,23 @@ from elasticsearch import Elasticsearch
 import pyspark
 
 
+def get_logger(name=''):
+    """
+    :param name: logger name
+    :return: configured logging instance
+    """
+    logging.basicConfig(level=os.environ.get('LOGLEVEL', logging.WARN), format='%(levelname)s: %(message)s')
+    logger = logging.getLogger(name)
+    logger.setLevel(os.environ.get('LOGLEVEL', logging.INFO))
+    return logger
+
+
 def get_spark_context(app_name, job_desc=None):
+    """
+    :param app_name: Spark application name
+    :param job_desc: Spark job description
+    :return: Spark context
+    """
     conf = pyspark.SparkConf()
     conf.setAppName(app_name)
     sc = pyspark.SparkContext(conf=conf)
@@ -18,6 +35,9 @@ def get_spark_context(app_name, job_desc=None):
 
 
 def get_es_client():
+    """
+    :return: Configured Elasticsearch client
+    """
     return Elasticsearch(['betaweb015', 'betaweb017', 'betaweb020'],
                          sniff_on_start=True, sniff_on_connection_fail=True, timeout=360)
 
@@ -58,6 +78,12 @@ def load_arglex(arglex_dir):
 
 
 def normalize_message_text(text):
+    """
+    Preprocess email plaintext for segmentation.
+
+    :param text: email text
+    :return: normalized message
+    """
     if type(text) is bytes:
         text = text.decode('utf-8', 'ignore')
 
@@ -92,6 +118,12 @@ def normalize_message_text(text):
 
 
 def decode_message_part(message_part):
+    """
+    Decode email message MIME part with correct encoding.
+
+    :param message_part: raw MIME part
+    :return: decoded part contents
+    """
     charset = message_part.get_content_charset()
     if charset is None or charset == '7-bit' or charset == '7bit':
         charset = 'us-ascii'
@@ -104,6 +136,15 @@ def decode_message_part(message_part):
 
 
 def get_message_id_prefix(message_id):
+    """
+    Get the prefix of a Gmane message ID that is most likely to match
+    all references to a specific message.
+
+    This is needed since Gmane message IDs and references to them are often not entirely identical.
+
+    :param message_id: full message ID
+    :return: ID prefix
+    """
     s = message_id.split('@', maxsplit=1)
     if len(s) > 1 and s[1].startswith('public.gmane.org'):
         s_pre = s[0].split('-', maxsplit=1)[0]
@@ -112,6 +153,15 @@ def get_message_id_prefix(message_id):
 
 
 def retrieve_email_thread(es, index, message_id, restrict_to_same_group=True):
+    """
+    Recursively retrieve a full email thread based on message IDs.
+
+    :param es: Elasticsearch client
+    :param index: Elasticsearch index
+    :param message_id: Message ID to use as a seed
+    :param restrict_to_same_group: Restrict retrieval to messages from the same Gmane group
+    :return: List of messages ordered by date
+    """
     def create_should_clause(p):
         return [
             {'prefix': {'headers.message_id.keyword': p}},

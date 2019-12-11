@@ -14,7 +14,7 @@ import numpy as np
 from sklearn import svm
 from tqdm import tqdm
 
-from parsing.message_segmenter import get_annotations_from_dict
+from util.segmentation import get_annotations_from_dict
 
 
 EMPTY = None
@@ -286,6 +286,7 @@ def label_lines(doc):
             yield l.rstrip(), None
 
         offset = end_offset
+
 
 def vectorize_lines(lines, callback):
     vectors = []

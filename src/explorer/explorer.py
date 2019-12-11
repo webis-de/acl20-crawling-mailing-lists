@@ -21,11 +21,13 @@ line_model = models.load_model(app.config.get('SEGMENTER_MODEL'))
 
 @app.route('/')
 def index_route():
+    """Main page."""
     return render_template('index.html', page_tpl='index.html')
 
 
 @app.route('/query-mails', methods=['POST'])
 def query_mails():
+    """Get Elasticsearch query response."""
     query = request.get_json()
     try:
         return jsonify(es.search(index=app.config.get('ES_INDEX'), body=query).get('hits'))
@@ -37,18 +39,21 @@ def query_mails():
 
 @app.route('/predict-lines', methods=['POST'])
 def predict_lines():
+    """Predict line-wise email segments."""
     predictions = list(predict_raw_text(line_model, request.data.decode('utf-8')))
     return jsonify(predictions)
 
 
 @app.route('/reformat-mail', methods=['POST'])
 def reformat_mail():
+    """Recursively reformat and predict email segments."""
     predictions = list(reformat_raw_text_recursive(line_model, request.data.decode('utf-8')))
     return jsonify(predictions)
 
 
 @app.route('/get-thread', methods=['GET'])
 def get_thread():
+    """Retrieve full thread for any given email."""
     if not request.args.get('message_id'):
         abort(400, 'Missing message_id')
     return jsonify(util.retrieve_email_thread(es, app.config.get('ES_INDEX'), request.args.get('message_id'),

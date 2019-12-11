@@ -1,27 +1,24 @@
 #!/usr/bin/env python3
 
-from collections import deque
 from datetime import datetime
 import json
-import logging
-import multiprocessing
 import os
 import re
 
 import click
-import fastText
 from tensorflow.compat.v1 import ConfigProto
 from tensorflow.compat.v1 import InteractiveSession
 from tensorflow.keras import backend as K
 from tensorflow.keras import callbacks, layers, metrics, models
-from tensorflow.keras.utils import Sequence
-from tensorflow.python.client import device_lib
+
 from tqdm import tqdm
 import numpy as np
 
 from util import util
+from util.segmentation import load_fasttext_model, get_num_data_workers_and_queue_size, MailLinesSequence
 
-logger = logging.getLogger(__name__)
+
+logger = util.get_logger(__name__)
 
 # Limit Tensorflow GPU memory
 config = ConfigProto()
@@ -30,38 +27,16 @@ config.gpu_options.allow_growth = True
 InteractiveSession(config=config)
 
 
-label_map = {
-    'paragraph': 0,
-    'closing': 1,
-    'inline_headers': 2,
-    'log_data': 3,
-    'mua_signature': 4,
-    'patch': 5,
-    'personal_signature': 6,
-    'quotation': 7,
-    'quotation_marker': 8,
-    'raw_code': 9,
-    'salutation': 10,
-    'section_heading': 11,
-    'tabular': 12,
-    'technical': 13,
-    'visual_separator': 14,
-    '<empty>': 15
-}
-
-label_map_inverse = {label_map[k]: k for k in label_map}
-label_map_onehot = {label: onehot for label, onehot in zip(label_map, np.eye(len(label_map)))}
-
-INPUT_DIM = 100
-OUTPUT_DIM = len(label_map_onehot)
-TRAIN_BATCH_SIZE = 128
-INF_BATCH_SIZE = 256
-MAX_LEN = 12
-CONTEXT = 4
+TRAIN_BATCH_SIZE = 128                      # Training mini-batch size
+INF_BATCH_SIZE = 256                        # Inference mini-batch size
+LINE_LEN = 12                               # Maximum number of word tokens per line
+INPUT_DIM = 100                             # Dimensionality of input embeddings
+CONTEXT_SHAPE = (9, LINE_LEN, INPUT_DIM)    # Shape of the model context matrix (2*context+1, line_len, word_dim)
 
 
 @click.group()
 def main():
+    """Train, apply, or evaluate an email or newsgroup message segmentation model."""
     pass
 
 
@@ -74,19 +49,19 @@ def main():
 @click.option('-v', '--validation-data', help='Validation Data JSON')
 @click.option('-f', '--fine-tune', help='Only fine-tune the given pre-trained model',
               type=click.Path(exists=True, dir_okay=False))
-@click.option('-t', '--tensorboard', is_flag=True, help='Write Tensorboard output')
-def train(fasttext_model, train_data, output, loss_function, validation_data, fine_tune, tensorboard):
+@click.option('-t', '--tensorboard', is_flag=True, help='Tensorboard log data directory')
+def train(fasttext_model, train_data, output, **kwargs):
     """
     Train message segmenter to classify lines of an email or newsgroup message.
 
     Arguments:
-        FASTTEXT_MODEL: pre-trained FastText embedding
-        TRAIN_DATA: input training data as JSON
-        OUTPUT: Model output
+        fasttext_model: pre-trained FastText embedding
+        train_data: input training data as JSON
+        output: Model output
     """
     logger.info('Loading FastText model...')
     load_fasttext_model(fasttext_model)
-    train_model(train_data, output, loss_function, validation_data, fine_tune, tensorboard)
+    train_model(train_data, output, **kwargs)
 
 
 @main.command()
@@ -94,27 +69,29 @@ def train(fasttext_model, train_data, output, loss_function, validation_data, fi
 @click.argument('fasttext-model', type=click.Path(exists=True, dir_okay=False))
 @click.argument('test-data', type=click.File('r'))
 @click.option('-o', '--output-json', help='Output JSONL file', type=click.File('w'))
-def predict(model, fasttext_model, test_data, output_json):
+def predict(model, fasttext_model, test_data, **kwargs):
     """
-    Apply trained message segmenter to predict lines of an email or newsgroup message.
+    Apply trained message segmentation model to predict lines of an email or newsgroup message.
 
     Arguments:
-        MODEL: Trained HDF5 segmenter model
-        FASTTEXT_MODEL: pre-trained FastText embedding
-        TEST_DATA: test message dump as JSON
+        model: Trained HDF5 segmenter model
+        fasttext_model: pre-trained FastText embedding
+        test_data: test message dump as JSON
     """
+    output_json = kwargs.get('output_json')
+
     logger.info('Loading FastText model...')
     load_fasttext_model(fasttext_model)
 
     segmenter = models.load_model(model)
     to_stdout = output_json is None
 
-    num_workers, queue_size = get_data_workers_and_queue_size()
+    num_workers, queue_size = get_num_data_workers_and_queue_size()
 
     logger.info('Predicting {}...'.format(test_data.name))
     while True:
         # Do not load more than 1k lines at once
-        pred_seq = MailLinesSequence(test_data, labeled=False, batch_size=INF_BATCH_SIZE, max_lines=1000)
+        pred_seq = MailLinesSequence(test_data, CONTEXT_SHAPE, labeled=False, batch_size=INF_BATCH_SIZE, max_lines=1000)
         if len(pred_seq) == 0:
             break
 
@@ -139,33 +116,38 @@ def predict(model, fasttext_model, test_data, output_json):
 @click.argument('eval-data', type=click.File('r'))
 def evaluate(model, fasttext_model, eval_data):
     """
-    Evaluate a trained message segmenter.
+    Evaluate a trained message segmentation model.
 
     Arguments:
-        MODEL: Trained HDF5 segmenter model
-        FASTTEXT_MODEL: pre-trained FastText embedding
-        EVAL_DATA: test message dump as JSON
+        model: Trained HDF5 segmenter model
+        fasttext_model: pre-trained FastText embedding
+        eval_data: test message dump as JSON
     """
     logger.info('Loading FastText model...')
     load_fasttext_model(fasttext_model)
 
+    def _binarize_pred_tensors(cls, *tensors):
+        """Binarize multi-class prediction tensors to the given class."""
+        cls = MailLinesSequence.LABEL_MAP[cls] if type(cls) is str else cls
+        return [K.cast(K.equal(K.argmax(t, axis=-1), cls), t.dtype) for t in tensors]
+
     def quotation_accuracy(y_true, y_pred):
-        return metrics.binary_accuracy(*binarize_pred_tensors('quotation', y_true, y_pred))
+        return metrics.binary_accuracy(*_binarize_pred_tensors('quotation', y_true, y_pred))
 
     def patch_accuracy(y_true, y_pred):
-        return metrics.binary_accuracy(*binarize_pred_tensors('patch', y_true, y_pred))
+        return metrics.binary_accuracy(*_binarize_pred_tensors('patch', y_true, y_pred))
 
     def paragraph_accuracy(y_true, y_pred):
-        return metrics.binary_accuracy(*binarize_pred_tensors('paragraph', y_true, y_pred))
+        return metrics.binary_accuracy(*_binarize_pred_tensors('paragraph', y_true, y_pred))
 
     def log_data_accuracy(y_true, y_pred):
-        return metrics.binary_accuracy(*binarize_pred_tensors('log_data', y_true, y_pred))
+        return metrics.binary_accuracy(*_binarize_pred_tensors('log_data', y_true, y_pred))
 
     def mua_signature_accuracy(y_true, y_pred):
-        return metrics.binary_accuracy(*binarize_pred_tensors('mua_signature', y_true, y_pred))
+        return metrics.binary_accuracy(*_binarize_pred_tensors('mua_signature', y_true, y_pred))
 
     def personal_signature_accuracy(y_true, y_pred):
-        return metrics.binary_accuracy(*binarize_pred_tensors('personal_signature', y_true, y_pred))
+        return metrics.binary_accuracy(*_binarize_pred_tensors('personal_signature', y_true, y_pred))
 
     segmenter = models.load_model(model)
     segmenter.compile(optimizer=segmenter.optimizer, loss=segmenter.loss,
@@ -174,9 +156,9 @@ def evaluate(model, fasttext_model, eval_data):
                                log_data_accuracy, mua_signature_accuracy, personal_signature_accuracy])
 
     logger.info('Evaluating {}...'.format(eval_data.name))
-    eval_seq = MailLinesSequence(eval_data, labeled=True, batch_size=INF_BATCH_SIZE)
+    eval_seq = MailLinesSequence(eval_data, CONTEXT_SHAPE, labeled=True, batch_size=INF_BATCH_SIZE)
 
-    cls_sum = np.zeros(len(label_map))
+    cls_sum = np.zeros(len(MailLinesSequence.LABEL_MAP))
     for _, labels in tqdm(eval_seq, desc='Counting labels', unit='samples', leave=False):
         cls_sum = np.add(cls_sum, np.sum(labels, axis=0))
 
@@ -184,151 +166,27 @@ def evaluate(model, fasttext_model, eval_data):
     cls_sum /= len(eval_seq) * INF_BATCH_SIZE
     cls_sum = sorted(enumerate(cls_sum), key=lambda x: x[1], reverse=True)
     for i, prob in cls_sum:
-        click.echo(' {: >19}: {:.4f}'.format(label_map_inverse[i], prob))
+        click.echo(' {: >19}: {:.4f}'.format(MailLinesSequence.LABEL_MAP_INVERSE[i], prob))
 
     logger.info('Predicting samples...')
-    num_workers, queue_size = get_data_workers_and_queue_size()
+    num_workers, queue_size = get_num_data_workers_and_queue_size()
     segmenter.evaluate_generator(eval_seq, verbose=True,
                                  use_multiprocessing=True, workers=num_workers, max_queue_size=queue_size)
 
 
-class MailLinesSequence(Sequence):
-    def __init__(self, input_file, labeled=True, batch_size=None, line_shape=(MAX_LEN, INPUT_DIM),
-                 input_is_raw_text=False, max_lines=None):
-        self.labeled = labeled
-        self.mail_lines = []
-        self.mail_start_indices = set()
-        self.mail_end_indices = set()
-        self.mail_metadata_map = {}
-
-        self.batch_size = batch_size
-        self.line_shape = line_shape
-
-        if not input_is_raw_text:
-            if type(input_file) is str:
-                self._load_jsonl(open(input_file, 'r'), max_lines)
-            else:
-                self._load_jsonl(input_file, max_lines)
-        else:
-            self._load_raw_text(input_file, max_lines)
-
-    def _load_jsonl(self, json_file, max_lines):
-        for i, json_text in enumerate(json_file):
-            mail_json = json.loads(json_text)
-
-            lines = None
-            if not self.labeled:
-                lines = [l + '\n' for l in mail_json['text'].split('\n')]
-
-            elif self.labeled and mail_json['labels']:
-                lines = [l for l in label_lines(mail_json)]
-
-            # Skip overly long mails (probably just excessive log data)
-            if len(lines) > 5000:
-                continue
-
-            if lines:
-                self.mail_start_indices.add(len(self.mail_lines))
-                self.mail_metadata_map[len(self.mail_lines)] = mail_json
-                self.mail_lines.extend(lines)
-                self.mail_end_indices.add(len(self.mail_lines))
-
-            if max_lines is not None and i >= max_lines:
-                break
-
-        if self.batch_size is None:
-            self.batch_size = len(self.mail_lines)
-
-    def _load_raw_text(self, raw_text, max_lines):
-        if max_lines is not None:
-            lines = [l + '\n' for l in raw_text.split('\n')[:max_lines]]
-        else:
-            lines = [l + '\n' for l in raw_text.split('\n')]
-
-        if lines:
-            self.mail_start_indices.add(len(self.mail_lines))
-            self.mail_lines.extend(lines)
-            self.mail_end_indices.add(len(self.mail_lines))
-
-        if self.batch_size is None:
-            self.batch_size = len(self.mail_lines)
-
-    def __len__(self):
-        return int(np.ceil(len(self.mail_lines) / self.batch_size))
-
-    def __getitem__(self, index):
-        index = index * self.batch_size
-        end_index = index + self.batch_size if self.batch_size is not None else len(self.mail_lines)
-        end_index = min(end_index, len(self.mail_lines))
-
-        padding_line = np.ones(self.line_shape)
-        batch = np.empty((self.batch_size,) + self.line_shape)
-        batch_prev = np.empty((self.batch_size,) + self.line_shape)
-        batch_context = np.empty((self.batch_size, CONTEXT * 2 + 1) + self.line_shape)
-        batch_labels = np.empty((self.batch_size, OUTPUT_DIM))
-
-        mail_slice = self.mail_lines[index:end_index]
-
-        def _get_line(line):
-            # Strip labels from line
-            return line if not self.labeled else line[0]
-
-        for i, line in enumerate(mail_slice):
-            if self.labeled:
-                batch_labels[i] = line[1]
-
-            context_lines = deque()
-
-            # Assemble previous context with padding
-            while len(context_lines) < CONTEXT:
-                ci = index + i - len(context_lines) - 1
-                if ci < 0 or ci + 1 in self.mail_start_indices:
-                    context_lines.extendleft([padding_line] * (CONTEXT - len(context_lines)))
-                    break
-                word_vecs = get_word_vectors(_get_line(self.mail_lines[ci]))
-                context_lines.appendleft(pad_2d_sequence(word_vecs, self.line_shape[0]))
-
-            # Add current line to context
-            word_vecs = get_word_vectors(_get_line(line))
-            context_lines.append(pad_2d_sequence(word_vecs, self.line_shape[0]))
-
-            # Assemble following context with padding
-            while len(context_lines) < 2 * CONTEXT + 1:
-                ci = index + i + len(context_lines)
-                if ci >= len(self.mail_lines) or ci in self.mail_end_indices:
-                    context_lines.extend([padding_line] * ((2 * CONTEXT + 1) - len(context_lines)))
-                    break
-                word_vecs = get_word_vectors(_get_line(self.mail_lines[ci]))
-                context_lines.append(pad_2d_sequence(word_vecs, self.line_shape[0]))
-
-            batch[i] = context_lines[CONTEXT]
-            batch_prev[i] = context_lines[CONTEXT - 1]
-            batch_context[i] = np.stack(context_lines)
-
-        if self.labeled:
-            return [batch, batch_prev, batch_context], batch_labels
-
-        return [batch, batch_prev, batch_context]
-
-
-def binarize_pred_tensors(cls, *tensors):
+def train_model(training_data, output_model, loss_function='categorical_crossentropy',
+                validation_data=None, fine_tune=None, tensorboard=False):
     """
-    Binarize multi-class prediction tensors to the given class.
+    Train message segmentation model.
+
+    :param training_data: JSON file with training data
+    :param output_model: path prefix for model checkpoints
+    :param loss_function: optimization loss function
+    :param validation_data: JSON file with validation data
+    :param fine_tune: fine-tune model from given file instead of training from scratch
+    :param tensorboard: Tensorboard log data directory
     """
-    cls = label_map[cls] if type(cls) is str else cls
-    return [K.cast(K.equal(K.argmax(t, axis=-1), cls), t.dtype) for t in tensors]
 
-
-def pad_2d_sequence(seq, max_len):
-    if seq.shape[0] > max_len:
-        pivot_idx = int(np.ceil(max_len * .75))
-        seq = np.concatenate((seq[:pivot_idx], seq[seq.shape[0] - max_len + pivot_idx:]))
-
-    return np.pad(seq, ((0, max(0, max_len - seq.shape[0])), (0, 0)), 'constant')
-
-
-def train_model(input_file, output_model, loss='categorical_crossentropy',
-                validation_input=None, fine_tune=None, tensorboard=False):
     tb_callback = callbacks.TensorBoard(log_dir='./data/graph/' + str(datetime.now()), update_freq='batch',
                                         write_graph=False, write_images=False)
     es_callback = callbacks.EarlyStopping(monitor='val_loss', verbose=1, patience=5)
@@ -336,7 +194,7 @@ def train_model(input_file, output_model, loss='categorical_crossentropy',
     cp_callback_no_val = callbacks.ModelCheckpoint(output_model + '.epoch-{epoch:02d}.loss-{loss:.3f}.h5')
 
     def get_line_model():
-        line_input = layers.Input(shape=(MAX_LEN, INPUT_DIM))
+        line_input = layers.Input(shape=(LINE_LEN, INPUT_DIM))
         masking = layers.Masking(0)(line_input)
         bi_seq = layers.Bidirectional(layers.GRU(128), merge_mode='sum')(masking)
         bi_seq = layers.BatchNormalization()(bi_seq)
@@ -344,7 +202,7 @@ def train_model(input_file, output_model, loss='categorical_crossentropy',
         return line_input, bi_seq
 
     def get_context_model():
-        context_input = layers.Input(shape=(CONTEXT * 2 + 1, MAX_LEN, INPUT_DIM))
+        context_input = layers.Input(shape=CONTEXT_SHAPE)
         conv2d = layers.Conv2D(128, (4, 4))(context_input)
         conv2d = layers.BatchNormalization()(conv2d)
         conv2d = layers.Activation('relu')(conv2d)
@@ -363,7 +221,7 @@ def train_model(input_file, output_model, loss='categorical_crossentropy',
 
         concat = layers.concatenate([line_model_cur, line_model_prev, context_model])
         dropout = layers.Dropout(0.25)(concat)
-        dense = layers.Dense(OUTPUT_DIM)(dropout)
+        dense = layers.Dense(len(MailLinesSequence.LABEL_MAP))(dropout)
         output = layers.Activation('softmax')(dense)
 
         return models.Model(inputs=[line_input_cur, line_input_prev, context_input], outputs=output)
@@ -379,22 +237,23 @@ def train_model(input_file, output_model, loss='categorical_crossentropy',
 
     compile_args = {
         'optimizer': 'adam',
-        'loss': loss,
+        'loss': loss_function,
         'metrics': ['categorical_accuracy']
     }
 
     effective_callbacks = []
     if fine_tune is None:
-        effective_callbacks = [es_callback, cp_callback] if validation_input is not None else [cp_callback_no_val]
+        effective_callbacks = [es_callback, cp_callback] if validation_data is not None else [cp_callback_no_val]
     if tensorboard:
         effective_callbacks.append(tb_callback)
 
     segmenter.compile(**compile_args)
     segmenter.summary()
 
-    train_seq = MailLinesSequence(input_file, labeled=True, batch_size=TRAIN_BATCH_SIZE)
-    val_seq = MailLinesSequence(validation_input, labeled=True, batch_size=INF_BATCH_SIZE) if validation_input else None
-    num_workers, queue_size = get_data_workers_and_queue_size()
+    num_workers, queue_size = get_num_data_workers_and_queue_size()
+    train_seq = MailLinesSequence(training_data, CONTEXT_SHAPE, labeled=True, batch_size=TRAIN_BATCH_SIZE)
+    val_seq = MailLinesSequence(validation_data, CONTEXT_SHAPE, labeled=True,
+                                batch_size=INF_BATCH_SIZE) if validation_data else None
 
     segmenter.fit_generator(train_seq, epochs=20, validation_data=val_seq, shuffle=True, use_multiprocessing=True,
                             workers=num_workers, max_queue_size=queue_size, callbacks=effective_callbacks)
@@ -410,33 +269,27 @@ def train_model(input_file, output_model, loss='categorical_crossentropy',
                                 workers=num_workers, max_queue_size=queue_size, callbacks=effective_callbacks)
 
 
-def get_data_workers_and_queue_size():
+def predict_raw_text(segmentation_model, message):
     """
-    Determine number of data loader workers and maximum queue size based on
-    whether we are running on the GPU or CPU.
+    Predict segments of raw message text.
+
+    :param segmentation_model: Trained segmentation model
+    :param message: email message text
+    :return: Generator of (message text, label text)
     """
-    if 'GPU' in str(device_lib.list_local_devices()):
-        num_workers = multiprocessing.cpu_count()
-        queue_size = 5
-    else:
-        num_workers = 2
-        queue_size = 200
 
-    return num_workers, queue_size
+    pred_seq = MailLinesSequence(message, CONTEXT_SHAPE, labeled=False, input_is_raw_text=True,
+                                 batch_size=INF_BATCH_SIZE)
+    return _post_process_labels(pred_seq, segmentation_model.predict_generator(pred_seq))
 
 
-def predict_raw_text(line_model, email):
-    pred_seq = MailLinesSequence(email, labeled=False, input_is_raw_text=True, batch_size=INF_BATCH_SIZE)
-    return post_process_labels(pred_seq, line_model.predict_generator(pred_seq))
-
-
-def reformat_raw_text_recursive(line_model, email, exclude_classes=None, max_depth=10):
+def reformat_raw_text_recursive(segmentation_model, email, exclude_classes=None, max_depth=10):
     """
     Predicts and recursively reformats an email.
     Nested quotations will be parsed, quotation markers and symbols are removed and
     the contents are predicted again.
 
-    :param line_model: input model
+    :param segmentation_model: trained segmentation model
     :param email: input email
     :param exclude_classes: exclude classes (default: signatures and technical)
     :param max_depth: maximum recursion depth
@@ -488,7 +341,7 @@ def reformat_raw_text_recursive(line_model, email, exclude_classes=None, max_dep
         return combined
 
     def recurse(text, depth=0):
-        predictions = predict_raw_text(line_model, text)
+        predictions = predict_raw_text(segmentation_model, text)
         lines = []
         quotation_lines = []
         for line, cls in predictions:
@@ -525,28 +378,39 @@ def reformat_raw_text_recursive(line_model, email, exclude_classes=None, max_dep
     return recurse(email)
 
 
-def post_process_labels(mails_sequence, labels_softmax):
+def _post_process_labels(mails_sequence, labels_softmax):
+    """
+    Postprocess predicted lines to replace softmax vectors with txt labels
+    and clean up some prediction noise.
+
+    :param mails_sequence: input MailLinesSequence
+    :param labels_softmax: predicted labels as softmax vectors for lines in `mails_sequence`
+    :return: Generator of (line text, label text)
+    """
+
     lines = mails_sequence.mail_lines
+    context_size = CONTEXT_SHAPE[0] // 2
+
     for i, (line, label) in enumerate(zip(lines, labels_softmax)):
         line = line if not mails_sequence.labeled else line[0]
         label_argmax = np.argmax(label)
         label_argsort = np.argsort(label)[::-1]
-        label_text = label_map_inverse[label_argmax]
+        label_text = MailLinesSequence.LABEL_MAP_INVERSE[label_argmax]
 
         prev_l = []
-        for j in range(CONTEXT):
+        for j in range(context_size):
             if i - j < 0 or i - j + 1 in mails_sequence.mail_start_indices:
                 break
-            prev_l.append(label_map_inverse[np.argmax(labels_softmax[i - j])])
-        prev_l.extend([None] * (CONTEXT - len(prev_l)))
+            prev_l.append(MailLinesSequence.LABEL_MAP_INVERSE[np.argmax(labels_softmax[i - j])])
+        prev_l.extend([None] * (context_size - len(prev_l)))
         prev_l.reverse()
 
         next_l = []
-        for j in range(CONTEXT):
+        for j in range(context_size):
             if i + 1 + j >= len(lines) or i + 1 + j in mails_sequence.mail_end_indices:
                 break
-            next_l.append(label_map_inverse[np.argmax(labels_softmax[i + 1 + j])])
-        next_l.extend([None] * (CONTEXT - len(next_l)))
+            next_l.append(MailLinesSequence.LABEL_MAP_INVERSE[np.argmax(labels_softmax[i + 1 + j])])
+        next_l.extend([None] * (context_size - len(next_l)))
 
         empty_classes = ['<empty>', 'visual_separator', None]
         prev_set_no_blank = set([l for l in prev_l if l not in empty_classes])
@@ -579,12 +443,12 @@ def post_process_labels(mails_sequence, labels_softmax):
         # Quotations
         elif label_text != 'quotation' \
                 and (line.strip().startswith('>') or line.strip().startswith('|')) \
-                and (label_map['quotation'] in label_argsort[:3] or prev_l[-1] == 'quotation'):
+                and (MailLinesSequence.LABEL_MAP['quotation'] in label_argsort[:3] or prev_l[-1] == 'quotation'):
             label_text = 'quotation'
 
         # Quotation markers
         elif label_text == 'quotation' and prev_l[-1] in empty_classes \
-                and label_map['quotation_marker'] in label_argsort[:3]:
+                and mails_sequence.LABEL_MAP['quotation_marker'] in label_argsort[:3]:
             label_text = 'quotation_marker'
 
         # Interrupted short blocks
@@ -597,7 +461,7 @@ def post_process_labels(mails_sequence, labels_softmax):
                 [*prev_set_no_blank][0] in next_set_no_blank \
                 and [*prev_set_no_blank][0] in ['mua_signature', 'personal_signature',
                                                 'patch', 'code', 'tabular', 'technical'] \
-                and label_map[[*prev_set_no_blank][0]] == label_argsort[1]:
+                and mails_sequence.LABEL_MAP[[*prev_set_no_blank][0]] == label_argsort[1]:
             label_text = [*prev_set_no_blank][0]
 
         # Interrupting stray classes
@@ -606,11 +470,20 @@ def post_process_labels(mails_sequence, labels_softmax):
                 and (next_l[0] == prev_l[-1] or (next_l[1] == prev_l[-1] and next_l[0] in empty_classes)):
             label_text = prev_l[-1]
 
-        labels_softmax[i] = label_map_onehot[label_text]
+        labels_softmax[i] = mails_sequence.LABEL_MAP_ONEHOT[label_text]
         yield line, label_text
 
 
 def export_mail_annotation_spans(predictions_softmax, pred_sequence, output_file=None, verbose=True):
+    """
+    Export predicted lines to JSON (start, end) spans.
+
+    :param predictions_softmax: predicted labels as softmax vectors
+    :param pred_sequence: input line sequence
+    :param output_file: output JSON file
+    :param verbose: print labeled lines to STDOUT
+    """
+
     text = ''
     main_content = ''
     annotations = []
@@ -620,6 +493,7 @@ def export_mail_annotation_spans(predictions_softmax, pred_sequence, output_file
     mail_dict = None
 
     def write_annotations(d, a, m=None):
+        """Write annotations to JSON file."""
         if not a or 'text' not in d or not d['text']:
             return
 
@@ -632,7 +506,7 @@ def export_mail_annotation_spans(predictions_softmax, pred_sequence, output_file
         json.dump(d, output_file)
         output_file.write('\n')
 
-    for i, (line, label_text) in enumerate(post_process_labels(pred_sequence, predictions_softmax)):
+    for i, (line, label_text) in enumerate(_post_process_labels(pred_sequence, predictions_softmax)):
         cur_label = label_text
         if prev_label is None:
             prev_label = cur_label
@@ -676,73 +550,6 @@ def export_mail_annotation_spans(predictions_softmax, pred_sequence, output_file
         if cur_label not in ['<empty>', None]:
             annotations.append((start_offset, len(text) - 1, cur_label))
         write_annotations(mail_dict, annotations, main_content)
-
-
-def get_annotations_from_dict(d):
-    """
-    Get annotations from Doccano either one of the two Doccano export formats.
-    This is a little compatibility hack make both formats work.
-    """
-    if 'annotations' in d:
-        return d['annotations']
-    elif 'labels' in d:
-        return [{'start_offset': a[0], 'end_offset': a[1], 'label': a[2]} for a in d['labels']]
-
-
-def label_lines(doc):
-    lines = [l + '\n' for l in doc['text'].split('\n')]
-    annotations = sorted(get_annotations_from_dict(doc), key=lambda a: a['start_offset'], reverse=True)
-    offset = 0
-    for l in lines:
-        end_offset = offset + len(l)
-
-        if annotations and offset > annotations[-1]['end_offset']:
-            annotations.pop()
-
-        if not annotations or not l.strip():
-            yield l, label_map_onehot['<empty>']
-            offset = end_offset
-            continue
-
-        if offset < annotations[-1]['end_offset'] and end_offset > annotations[-1]['start_offset']:
-            yield l, label_map_onehot[annotations[-1]['label']]
-        else:
-            yield l, label_map_onehot['<empty>']
-
-        offset = end_offset
-
-
-_model = None
-
-
-def load_fasttext_model(model_path):
-    global _model
-    if not _model:
-        _model = fastText.load_model(model_path)
-
-
-def get_word_vectors(text):
-    try:
-        matrix = [_model.get_word_vector(w) for w in fastText.tokenize(util.normalize_message_text(text))]
-    except Exception as e:
-        logger.error('Failed to tokenize line: {}'.format(e))
-        matrix = [get_word_vector('')]
-
-    if len(matrix) == 0:
-        matrix = [get_word_vector('')]
-
-    return np.array(matrix)
-
-
-def get_word_vector(word):
-    if _model is None:
-        raise RuntimeError("FastText vectors not loaded. Call load_fasttext_model() first.")
-
-    try:
-        return _model.get_word_vector(word)
-    except Exception as e:
-        logger.error('Failed to obtain word vector: {}'.format(e))
-        return _model.get_word_vector('')
 
 
 if __name__ == '__main__':
