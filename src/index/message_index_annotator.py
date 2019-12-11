@@ -11,6 +11,7 @@ import os
 import re
 from time import time
 
+from argument_esa_model.esa import ESA
 import click
 from elasticsearch import helpers
 import spacy
@@ -22,7 +23,7 @@ from parsing.message_segmenter import load_fasttext_model, predict_raw_text
 from util import util
 
 
-ANNOTATION_VERSION = 6
+ANNOTATION_VERSION = 8
 
 logging.basicConfig(level=os.environ.get('LOGLEVEL', logging.WARN))
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ logger.setLevel(os.environ.get('LOGLEVEL', logging.INFO))
 @click.option('-s', '--slices', help='Number of Elasticsearch scroll slices', type=int, default=100)
 @click.option('-a', '--arg-lexicon', help='Arguing Lexicon directory (Somasundaran et al., 2007)',
               type=click.Path(exists=True, file_okay=False))
+@click.option('-t', '--args-topic-model', multiple=True, type=click.Path(exists=True, dir_okay=False))
 @click.option('-n', '--dry-run', help='Dry run (do not index anything)', is_flag=True)
 def main(*args, **kwargs):
     """
@@ -54,7 +56,7 @@ def main(*args, **kwargs):
     start_indexer(*args, **kwargs)
 
 
-def start_indexer(index, segmentation_model, fasttext_model, slices, arg_lexicon, dry_run=False):
+def start_indexer(index, segmentation_model, fasttext_model, slices, arg_lexicon, args_topic_model, dry_run=False):
     if dry_run:
         logger.warning('Started in dry run mode, nothing will be indexed.')
 
@@ -97,6 +99,9 @@ def start_indexer(index, segmentation_model, fasttext_model, slices, arg_lexicon
             },
             'arg_classes_matched_regex': {
                 'type': 'keyword'
+            },
+            'topics': {
+                'type': 'keyword'
             }
         },
         'dynamic': True,
@@ -125,10 +130,11 @@ def start_indexer(index, segmentation_model, fasttext_model, slices, arg_lexicon
     sc = util.get_spark_context('Mail Annotation Indexer')
     sc.range(0, slices).foreach(partial(start_spark_worker, max_slices=slices, index=index,
                                         segmentation_model=segmentation_model, fasttext_model=fasttext_model,
-                                        arg_lexicon=arg_lexicon, dry_run=dry_run))
+                                        arg_lexicon=arg_lexicon, args_topic_models=args_topic_model, dry_run=dry_run))
 
 
-def start_spark_worker(slice_id, max_slices, index, segmentation_model, fasttext_model, arg_lexicon, dry_run=False):
+def start_spark_worker(slice_id, max_slices, index, segmentation_model, fasttext_model,
+                       arg_lexicon, args_topic_models, dry_run=False):
     logger.info('Loading SpaCy...')
     nlp = spacy.load('en_core_web_sm')
     nlp.add_pipe(LanguageDetector(), name='language_detector', last=True)
@@ -141,6 +147,11 @@ def start_spark_worker(slice_id, max_slices, index, segmentation_model, fasttext
         logger.info('Compiling arguing lexicon regex list...')
         arg_lexicon = [(re.compile(r'\b' + regex + r'\b', re.IGNORECASE), regex, cls)
                        for regex, cls in arg_lexicon]
+
+    topic_models = []
+    if args_topic_models:
+        for path in args_topic_models:
+            topic_models.append(ESA(path))
 
     logger.info('Retrieving initial batch (slice {}/{})...'.format(slice_id, max_slices))
     es = util.get_es_client()
@@ -163,7 +174,7 @@ def start_spark_worker(slice_id, max_slices, index, segmentation_model, fasttext
     while results['hits']['hits']:
         logger.info('Processing batch.')
         doc_gen = generate_docs(results['hits']['hits'], index=index, model=segmentation_model,
-                                nlp=nlp, arg_lexicon=arg_lexicon, progress_bar=False)
+                                nlp=nlp, arg_lexicon=arg_lexicon, args_topic_models=topic_models, progress_bar=False)
         try:
             if dry_run:
                 while True:
@@ -180,7 +191,7 @@ def start_spark_worker(slice_id, max_slices, index, segmentation_model, fasttext
         results = es.scroll(scroll_id=results['_scroll_id'], scroll='35m')
 
 
-def generate_docs(batch, index, model, nlp=None, arg_lexicon=None, progress_bar=True):
+def generate_docs(batch, index, model, nlp=None, arg_lexicon=None, args_topic_models=None, progress_bar=True):
     if progress_bar:
         batch = tqdm(batch, desc='Preparing documents in batch', unit='docs', total=len(batch), leave=False)
 
@@ -278,6 +289,13 @@ def generate_docs(batch, index, model, nlp=None, arg_lexicon=None, progress_bar=
         if len(main_content) > 15:
             logger.debug('Detecting language')
             output_doc['lang'] = nlp(main_content)._.language['language']
+
+        topics = set()
+        if args_topic_models:
+            logger.debug('Detecting topics')
+            for tm in args_topic_models:
+                topics.update([t for t, v in tm.process(main_content, False).items() if v >= 0.15])
+        output_doc['topics'] = list(topics)
 
         output_doc['main_content'] = main_content
         output_doc['annotation_version'] = ANNOTATION_VERSION
