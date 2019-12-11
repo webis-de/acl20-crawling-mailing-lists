@@ -21,6 +21,16 @@ The corpus explorer can be started using the `run.sh` script as follows:
     ./run.sh explorer [flask-options]
 
 ## Other Tools in `src`
+All command line tools in `src` can be started as follows:
+
+    ./run.sh FILENAME
+
+For individual usage instructions, run
+
+    ./run.sh FILENAME --help
+    
+The following tools are available:
+
 - `'index/`
     - `mail_sampler.py`: Sample emails from Elasticsearch index
     - `message_index_annotator.py`: Segment and annotate message in an existing Elasticsearch index
@@ -29,4 +39,3 @@ The corpus explorer can be started using the `run.sh` script as follows:
     - `message_segmenter.py`: Email message segmentation model (training, inference, evaluation)
     - `message_segmenter_svm.py`: Legacy email message segmentation model based on Tang et al., 2005
 - `util/`: Various tools and libraries
-
