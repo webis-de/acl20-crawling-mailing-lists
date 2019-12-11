@@ -154,11 +154,11 @@ class MailLinesSequence(Sequence):
                     context_lines.extendleft([padding_line] * (self.context_size - len(context_lines)))
                     break
                 word_vecs = get_word_vectors(_get_line(self.mail_lines[ci]))
-                context_lines.appendleft(_pad_line_vectors(word_vecs, self.line_shape[0]))
+                context_lines.appendleft(self._pad_line_vectors(word_vecs, self.line_shape[0]))
 
             # Add current line to context
             word_vecs = get_word_vectors(_get_line(line))
-            context_lines.append(_pad_line_vectors(word_vecs, self.line_shape[0]))
+            context_lines.append(self._pad_line_vectors(word_vecs, self.line_shape[0]))
 
             # Assemble following context with padding
             while len(context_lines) < 2 * self.context_size + 1:
@@ -167,7 +167,7 @@ class MailLinesSequence(Sequence):
                     context_lines.extend([padding_line] * ((2 * self.context_size + 1) - len(context_lines)))
                     break
                 word_vecs = get_word_vectors(_get_line(self.mail_lines[ci]))
-                context_lines.append(_pad_line_vectors(word_vecs, self.line_shape[0]))
+                context_lines.append(self._pad_line_vectors(word_vecs, self.line_shape[0]))
 
             batch[i] = context_lines[self.context_size]
             batch_prev[i] = context_lines[self.context_size - 1]
@@ -178,23 +178,39 @@ class MailLinesSequence(Sequence):
 
         return [batch, batch_prev, batch_context]
 
+    @staticmethod
+    def _pad_line_vectors(vectors, max_len):
+        """
+        Assemble a list of variable-length vectors into a padded 2D matrix of dimensions (n, max_len).
 
-def get_num_data_workers_and_queue_size():
+        :param vectors: list or array of vectors
+        :param max_len: maximum line length
+        :return: padded matrix
+        """
+        if vectors.shape[0] > max_len:
+            pivot_idx = int(np.ceil(max_len * .75))
+            vectors = np.concatenate((vectors[:pivot_idx], vectors[vectors.shape[0] - max_len + pivot_idx:]))
+
+        return np.pad(vectors, ((0, max(0, max_len - vectors.shape[0])), (0, 0)), 'constant')
+
+    _fasttext_model = None
+
+    @property
+    def num_workers(self):
+        """Get appropriate number of multiprocessing data workers to use with this MailLinesSequence."""
+        return multiprocessing.cpu_count() if has_gpu() else 2
+
+    @property
+    def max_queue_size(self):
+        """Get appropriate maximum queue size to use with this MailLinesSequence."""
+        return 10 if has_gpu() else 200
+
+
+def has_gpu():
     """
-    Determine number of data loader workers and maximum queue size based on
-    whether we are running on the GPU or CPU.
-
-    :return: (number of workers, maximum queue size)
+    :return: whether a GPU device is available
     """
-
-    if 'GPU' in str(device_lib.list_local_devices()):
-        num_workers = multiprocessing.cpu_count()
-        queue_size = 5
-    else:
-        num_workers = 2
-        queue_size = 200
-
-    return num_workers, queue_size
+    return 'GPU' in str(device_lib.list_local_devices())
 
 
 def annotation_dict_to_lines(annotation_doc):
@@ -235,21 +251,6 @@ def get_annotations_from_dict(d):
         return d['annotations']
     elif 'labels' in d:
         return [{'start_offset': a[0], 'end_offset': a[1], 'label': a[2]} for a in d['labels']]
-
-
-def _pad_line_vectors(vectors, max_len):
-    """
-    Assemble a list of variable-length vectors into a padded 2D matrix of dimensions (n, max_len).
-
-    :param vectors: list or array of vectors
-    :param max_len: maximum line length
-    :return: padded matrix
-    """
-    if vectors.shape[0] > max_len:
-        pivot_idx = int(np.ceil(max_len * .75))
-        vectors = np.concatenate((vectors[:pivot_idx], vectors[vectors.shape[0] - max_len + pivot_idx:]))
-
-    return np.pad(vectors, ((0, max(0, max_len - vectors.shape[0])), (0, 0)), 'constant')
 
 
 _fasttext_model = None

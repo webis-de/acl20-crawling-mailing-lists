@@ -15,7 +15,7 @@ from tqdm import tqdm
 import numpy as np
 
 from util import util
-from util.segmentation import load_fasttext_model, get_num_data_workers_and_queue_size, MailLinesSequence
+from util.mail_classification import load_fasttext_model, MailLinesSequence
 
 
 logger = util.get_logger(__name__)
@@ -59,7 +59,7 @@ def train(fasttext_model, train_data, output, **kwargs):
         train_data: input training data as JSON
         output: Model output
     """
-    logger.info('Loading FastText model...')
+    logger.info('Loading FastText model')
     load_fasttext_model(fasttext_model)
     train_model(train_data, output, **kwargs)
 
@@ -80,15 +80,13 @@ def predict(model, fasttext_model, test_data, **kwargs):
     """
     output_json = kwargs.get('output_json')
 
-    logger.info('Loading FastText model...')
+    logger.info('Loading FastText model')
     load_fasttext_model(fasttext_model)
 
     segmenter = models.load_model(model)
     to_stdout = output_json is None
 
-    num_workers, queue_size = get_num_data_workers_and_queue_size()
-
-    logger.info('Predicting {}...'.format(test_data.name))
+    logger.info('Predicting {}'.format(test_data.name))
     while True:
         # Do not load more than 1k lines at once
         pred_seq = MailLinesSequence(test_data, CONTEXT_SHAPE, labeled=False, batch_size=INF_BATCH_SIZE, max_lines=1000)
@@ -99,8 +97,8 @@ def predict(model, fasttext_model, test_data, **kwargs):
                                                   verbose=(not to_stdout),
                                                   steps=(None if not to_stdout else 10),
                                                   use_multiprocessing=True,
-                                                  workers=num_workers,
-                                                  max_queue_size=queue_size)
+                                                  workers=pred_seq.num_workers,
+                                                  max_queue_size=pred_seq.max_queue_size)
         export_mail_annotation_spans(predictions, pred_seq, output_json, verbose=to_stdout)
 
         if output_json:
@@ -123,7 +121,7 @@ def evaluate(model, fasttext_model, eval_data):
         fasttext_model: pre-trained FastText embedding
         eval_data: test message dump as JSON
     """
-    logger.info('Loading FastText model...')
+    logger.info('Loading FastText model')
     load_fasttext_model(fasttext_model)
 
     def _binarize_pred_tensors(cls, *tensors):
@@ -155,7 +153,7 @@ def evaluate(model, fasttext_model, eval_data):
                                quotation_accuracy, patch_accuracy, paragraph_accuracy,
                                log_data_accuracy, mua_signature_accuracy, personal_signature_accuracy])
 
-    logger.info('Evaluating {}...'.format(eval_data.name))
+    logger.info('Evaluating \'{}\''.format(eval_data.name))
     eval_seq = MailLinesSequence(eval_data, CONTEXT_SHAPE, labeled=True, batch_size=INF_BATCH_SIZE)
 
     cls_sum = np.zeros(len(MailLinesSequence.LABEL_MAP))
@@ -168,10 +166,9 @@ def evaluate(model, fasttext_model, eval_data):
     for i, prob in cls_sum:
         click.echo(' {: >19}: {:.4f}'.format(MailLinesSequence.LABEL_MAP_INVERSE[i], prob))
 
-    logger.info('Predicting samples...')
-    num_workers, queue_size = get_num_data_workers_and_queue_size()
-    segmenter.evaluate_generator(eval_seq, verbose=True,
-                                 use_multiprocessing=True, workers=num_workers, max_queue_size=queue_size)
+    logger.info('Predicting samples')
+    segmenter.evaluate_generator(eval_seq, verbose=True, use_multiprocessing=True,
+                                 workers=eval_seq.num_workers, max_queue_size=eval_seq.max_queue_size)
 
 
 def train_model(training_data, output_model, loss_function='categorical_crossentropy',
@@ -230,7 +227,7 @@ def train_model(training_data, output_model, loss_function='categorical_crossent
         segmenter = get_base_model()
     else:
         segmenter = models.load_model(fine_tune)
-        logger.info('Freezing layers...')
+        logger.info('Freezing layers')
 
         for layer in segmenter.layers[:-2]:
             layer.trainable = False
@@ -250,23 +247,24 @@ def train_model(training_data, output_model, loss_function='categorical_crossent
     segmenter.compile(**compile_args)
     segmenter.summary()
 
-    num_workers, queue_size = get_num_data_workers_and_queue_size()
     train_seq = MailLinesSequence(training_data, CONTEXT_SHAPE, labeled=True, batch_size=TRAIN_BATCH_SIZE)
     val_seq = MailLinesSequence(validation_data, CONTEXT_SHAPE, labeled=True,
                                 batch_size=INF_BATCH_SIZE) if validation_data else None
 
     segmenter.fit_generator(train_seq, epochs=20, validation_data=val_seq, shuffle=True, use_multiprocessing=True,
-                            workers=num_workers, max_queue_size=queue_size, callbacks=effective_callbacks)
+                            workers=train_seq.num_workers, max_queue_size=train_seq.max_queue_size,
+                            callbacks=effective_callbacks)
 
     if fine_tune is not None:
-        logger.info('Unfreezing layers...')
+        logger.info('Unfreezing layers')
         for layer in segmenter.layers:
             layer.trainable = True
 
         effective_callbacks.append(cp_callback_no_val)
         segmenter.compile(**compile_args)
         segmenter.fit_generator(train_seq, epochs=5, validation_data=val_seq, shuffle=True, use_multiprocessing=True,
-                                workers=num_workers, max_queue_size=queue_size, callbacks=effective_callbacks)
+                                workers=train_seq.num_workers, max_queue_size=train_seq.max_queue_size,
+                                callbacks=effective_callbacks)
 
 
 def predict_raw_text(segmentation_model, message):

@@ -14,7 +14,7 @@ import numpy as np
 from sklearn import svm
 from tqdm import tqdm
 
-from util.segmentation import get_annotations_from_dict
+from util.mail_classification import get_annotations_from_dict
 
 
 EMPTY = None
@@ -127,32 +127,32 @@ def train_clf(labeled_mails, model_dir):
     y_signature_start, y_signature_end = get_boundary_labels(y_signature, SIGNATURE)
     y_code_start, y_code_end = get_boundary_labels(y_code, CODE)
 
-    click.echo('Training header start model...', err=True)
+    click.echo('Training header start model', err=True)
     clf_header_start = svm.SVC(kernel='poly', gamma='scale')
     clf_header_start.fit(X_header, y_header_start)
     pickle.dump(clf_header_start, open(os.path.join(model_dir, 'header_start.model'), 'wb'))
 
-    click.echo('Training header end model...', err=True)
+    click.echo('Training header end model', err=True)
     clf_header_end = svm.SVC(kernel='poly', gamma='scale')
     clf_header_end.fit(X_header, y_header_end)
     pickle.dump(clf_header_end, open(os.path.join(model_dir, 'header_end.model'), 'wb'))
 
-    click.echo('Training signature start model...', err=True)
+    click.echo('Training signature start model', err=True)
     clf_signature_start = svm.SVC(kernel='poly', gamma='scale')
     clf_signature_start.fit(X_signature, y_signature_start)
     pickle.dump(clf_signature_start, open(os.path.join(model_dir, 'signature_start.model'), 'wb'))
 
-    click.echo('Training signature end model...', err=True)
+    click.echo('Training signature end model', err=True)
     clf_signature_end = svm.SVC(kernel='poly', gamma='scale')
     clf_signature_end.fit(X_signature, y_signature_end)
     pickle.dump(clf_signature_end, open(os.path.join(model_dir, 'signature_end.model'), 'wb'))
 
-    click.echo('Training code start model...', err=True)
+    click.echo('Training code start model', err=True)
     clf_code_start = svm.SVC(kernel='poly', gamma='scale')
     clf_code_start.fit(X_code, y_code_start)
     pickle.dump(clf_code_start, open(os.path.join(model_dir, 'code_start.model'), 'wb'))
 
-    click.echo('Training code end model...', err=True)
+    click.echo('Training code end model', err=True)
     clf_code_end = svm.SVC(kernel='poly', gamma='scale')
     clf_code_end.fit(X_code, y_code_end)
     pickle.dump(clf_code_end, open(os.path.join(model_dir, 'code_end.model'), 'wb'))
