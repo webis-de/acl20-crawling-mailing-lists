@@ -12,7 +12,7 @@ from util import util
 logger = util.get_logger(__name__)
 
 
-_LABEL_MAP = {
+_SEGMENT_LABEL_MAP = {
     'paragraph': 0,
     'closing': 1,
     'inline_headers': 2,
@@ -35,9 +35,9 @@ _LABEL_MAP = {
 class MailLinesSequence(Sequence):
     """Keras Sequence of email message lines."""
 
-    LABEL_MAP = _LABEL_MAP
-    LABEL_MAP_INVERSE = {_LABEL_MAP[k]: k for k in _LABEL_MAP}
-    LABEL_MAP_ONEHOT = {label: onehot for label, onehot in zip(_LABEL_MAP, np.eye(len(_LABEL_MAP)))}
+    LABEL_MAP = _SEGMENT_LABEL_MAP
+    LABEL_MAP_INVERSE = {_SEGMENT_LABEL_MAP[k]: k for k in _SEGMENT_LABEL_MAP}
+    LABEL_MAP_ONEHOT = {label: onehot for label, onehot in zip(_SEGMENT_LABEL_MAP, np.eye(len(_SEGMENT_LABEL_MAP)))}
 
     def __init__(self, input_data, context_shape, labeled=True, batch_size=None,
                  input_is_raw_text=False, max_lines=None):
