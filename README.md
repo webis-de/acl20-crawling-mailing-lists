@@ -31,11 +31,12 @@ For individual usage instructions, run
     
 The following tools are available:
 
-- `'index/`
+- `index/`
     - `mail_sampler.py`: Sample emails from Elasticsearch index
     - `message_index_annotator.py`: Segment and annotate message in an existing Elasticsearch index
     - `warc_indexer.py`: Index email WARC into Elasticsearch
 - `parsing/`:
     - `message_segmenter.py`: Email message segmentation model (training, inference, evaluation)
     - `message_segmenter_svm.py`: Legacy email message segmentation model based on Tang et al., 2005
-- `util/`: Various tools and libraries
+- `util/`:
+    - Various other tools and libraries (see `--help` listings and doc strings)
