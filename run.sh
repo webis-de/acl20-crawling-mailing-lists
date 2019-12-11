@@ -3,7 +3,9 @@
 # Run (Python) script with correct PYTHONPATH.
 #
 
-export PYTHONPATH="$(dirname "$(realpath "$0")")/src:$PYTHONPATH"
+SRC_PATH="$(dirname "$(realpath "$0")")/src"
+
+export PYTHONPATH="${SRC_PATH}:$PYTHONPATH"
 export TF_CPP_MIN_LOG_LEVEL=3
 export PYTHONWARNINGS=ignore
 
@@ -13,7 +15,11 @@ if [ "$1" == "" ]; then
     exit 1
 fi
 
-if [ -x "$1" ]; then
+if [ "$1" == "explorer" ]; then
+    shift
+    export FLASK_APP="${SRC_PATH}/explorer/explorer.py"
+    flask run "$@"
+elif [ -x "$1" ]; then
     exec "$@"
 else
     exec python3 "$@"
