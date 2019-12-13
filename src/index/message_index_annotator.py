@@ -18,7 +18,7 @@ from parsing.message_segmenter import load_fasttext_model, predict_raw_text
 from util import util
 
 
-ANNOTATION_VERSION = 8
+ANNOTATION_VERSION = 9
 
 logger = util.get_logger(__name__)
 
@@ -263,7 +263,7 @@ def _generate_docs(batch, index, segmentation_model, nlp, **kwargs):
         main_content = ''
         output_doc['segments'] = []
         for begin, end, label in labels:
-            if label == 'paragraph':
+            if label in ['paragraph', 'section_heading']:
                 main_content += raw_text[begin:end]
 
             stats[label]['num'] += 1
