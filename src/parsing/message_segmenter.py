@@ -189,8 +189,8 @@ def evaluate(model, fasttext_model, eval_data):
     confusion_mat = tf.math.confusion_matrix(labels=y_true, predictions=y_pred,
                                              num_classes=len(MailLinesSequence.LABEL_MAP)).numpy()
     click.echo('\nConfusion matrix:')
-    with np.printoptions(precision=4, suppress=True, linewidth=9999, threshold=9999):
-        click.echo(confusion_mat / len(y_true))
+    with np.printoptions(precision=3, suppress=True, linewidth=9999, threshold=9999):
+        click.echo(confusion_mat / np.sum(confusion_mat, axis=1)[:, np.newaxis])
     click.echo('\nLabels:')
     click.echo([l for l in MailLinesSequence.LABEL_MAP.keys()])
 
