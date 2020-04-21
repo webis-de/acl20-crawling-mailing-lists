@@ -6,6 +6,7 @@ import os
 import re
 
 import click
+import tensorflow as tf
 from tensorflow.compat.v1 import ConfigProto
 from tensorflow.compat.v1 import InteractiveSession
 from tensorflow.keras import backend as K
@@ -32,6 +33,8 @@ INF_BATCH_SIZE = 256                        # Inference mini-batch size
 LINE_LEN = 12                               # Maximum number of word tokens per line
 INPUT_DIM = 100                             # Dimensionality of input embeddings
 CONTEXT_SHAPE = (9, LINE_LEN, INPUT_DIM)    # Shape of the model context matrix (2*context+1, line_len, word_dim)
+
+tf.get_logger().setLevel('ERROR')
 
 
 @click.group()
@@ -147,18 +150,19 @@ def evaluate(model, fasttext_model, eval_data):
     def personal_signature_accuracy(y_true, y_pred):
         return metrics.binary_accuracy(*_binarize_pred_tensors('personal_signature', y_true, y_pred))
 
+    eval_metrics = ['categorical_accuracy', quotation_accuracy, patch_accuracy, paragraph_accuracy,
+                    log_data_accuracy, mua_signature_accuracy, personal_signature_accuracy]
     segmenter = models.load_model(model)
-    segmenter.compile(optimizer=segmenter.optimizer, loss=segmenter.loss,
-                      metrics=['categorical_accuracy',
-                               quotation_accuracy, patch_accuracy, paragraph_accuracy,
-                               log_data_accuracy, mua_signature_accuracy, personal_signature_accuracy])
+    segmenter.compile(optimizer=segmenter.optimizer, loss=segmenter.loss, metrics=eval_metrics)
 
     logger.info('Evaluating \'{}\''.format(eval_data.name))
     eval_seq = MailLinesSequence(eval_data, CONTEXT_SHAPE, labeled=True, batch_size=INF_BATCH_SIZE)
 
     cls_sum = np.zeros(len(MailLinesSequence.LABEL_MAP))
+    y_true = np.zeros(0)
     for _, labels in tqdm(eval_seq, desc='Counting labels', unit='samples', leave=False):
         cls_sum = np.add(cls_sum, np.sum(labels, axis=0))
+        y_true = np.concatenate((y_true,  np.argmax(labels, axis=1)))
 
     click.echo('Ground-truth class distribution:')
     cls_sum /= len(eval_seq) * INF_BATCH_SIZE
@@ -166,9 +170,29 @@ def evaluate(model, fasttext_model, eval_data):
     for i, prob in cls_sum:
         click.echo(' {: >19}: {:.4f}'.format(MailLinesSequence.LABEL_MAP_INVERSE[i], prob))
 
-    logger.info('Predicting samples')
-    segmenter.evaluate_generator(eval_seq, verbose=True, use_multiprocessing=True,
-                                 workers=eval_seq.num_workers, max_queue_size=eval_seq.max_queue_size)
+    logger.info('Calculating evaluation metrics')
+    metric_data = segmenter.evaluate_generator(eval_seq, verbose=False, use_multiprocessing=True,
+                                               workers=eval_seq.num_workers, max_queue_size=eval_seq.max_queue_size)
+    click.echo('\nMetrics:')
+    for i, m in enumerate(metric_data):
+        if i == 0:
+            click.echo(' - loss: {:.4}'.format(m))
+        elif type(eval_metrics[i - 1]) is str:
+            click.echo(' - {}: {:.4}'.format(eval_metrics[i - 1], m))
+        else:
+            click.echo(' - {}: {:.4}'.format(eval_metrics[i - 1].__name__, m))
+
+    logger.info('Calculating confusion matrix ')
+    y_pred = segmenter.predict_generator(eval_seq, verbose=False, use_multiprocessing=True,
+                                         workers=eval_seq.num_workers, max_queue_size=eval_seq.max_queue_size)
+    y_pred = np.argmax(y_pred, axis=1)
+    confusion_mat = tf.math.confusion_matrix(labels=y_true, predictions=y_pred,
+                                             num_classes=len(MailLinesSequence.LABEL_MAP)).numpy()
+    click.echo('\nConfusion matrix:')
+    with np.printoptions(precision=4, suppress=True, linewidth=9999, threshold=9999):
+        click.echo(confusion_mat / len(y_true))
+    click.echo('\nLabels:')
+    click.echo([l for l in MailLinesSequence.LABEL_MAP.keys()])
 
 
 def train_model(training_data, output_model, loss_function='categorical_crossentropy',
