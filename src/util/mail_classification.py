@@ -4,12 +4,14 @@ import json
 
 import fastText
 import numpy as np
+import tensorflow as tf
 from tensorflow.keras.utils import Sequence
 from tensorflow.python.client import device_lib
 
 from util import util
 
 logger = util.get_logger(__name__)
+tf.get_logger().setLevel('ERROR')
 
 
 _SEGMENT_LABEL_MAP = {
