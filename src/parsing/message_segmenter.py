@@ -275,7 +275,7 @@ def train_model(training_data, output_model, loss_function='categorical_crossent
     val_seq = MailLinesSequence(validation_data, CONTEXT_SHAPE, labeled=True,
                                 batch_size=INF_BATCH_SIZE) if validation_data else None
 
-    segmenter.fit_generator(train_seq, epochs=20, validation_data=val_seq, shuffle=True, use_multiprocessing=True,
+    segmenter.fit_generator(train_seq, epochs=20, validation_data=val_seq, shuffle=True, use_multiprocessing=False,
                             workers=train_seq.num_workers, max_queue_size=train_seq.max_queue_size,
                             callbacks=effective_callbacks)
 
@@ -286,7 +286,7 @@ def train_model(training_data, output_model, loss_function='categorical_crossent
 
         effective_callbacks.append(cp_callback_no_val)
         segmenter.compile(**compile_args)
-        segmenter.fit_generator(train_seq, epochs=5, validation_data=val_seq, shuffle=True, use_multiprocessing=True,
+        segmenter.fit_generator(train_seq, epochs=5, validation_data=val_seq, shuffle=True, use_multiprocessing=False,
                                 workers=train_seq.num_workers, max_queue_size=train_seq.max_queue_size,
                                 callbacks=effective_callbacks)
 
