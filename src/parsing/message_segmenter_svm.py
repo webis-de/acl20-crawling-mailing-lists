@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 #
-# This file contains legacy code that is mostly meant as a reproduction study
+# This file contains legacy code that is only meant as a reproduction study
 # of the 2005 paper "Email Data Cleaning" by Tang et al.
-# For actual message segmentation, use the deep segmenter from message_segmenter.py.
+# For better message segmentation, use the deep segmenter from message_segmenter.py.
 
 import json
 import os
@@ -13,16 +13,16 @@ import click
 import numpy as np
 from sklearn import svm
 from tqdm import tqdm
+import tensorflow as tf
 
 from util.mail_classification import get_annotations_from_dict
 
-
-EMPTY = None
 CONTENT = 0
 HEADER = 1
 SIGNATURE = 2
 CODE = 3
 QUOTATION = 4
+EMPTY = 5
 
 label_map = {
     'paragraph': CONTENT,
@@ -85,21 +85,29 @@ def evaluate(eval_data, model_dir, verbose):
     if not verbose:
         pred_gen = tqdm(pred_gen, desc='Predicting lines', leave=False)
 
-    pred = np.array([(p[-2] if p[-2] is not None else -1, p[-1] if p[-1] is not None else -1) for p in pred_gen])
-    pred, truth = [np.reshape(a, (a.shape[0],)) for a in np.split(pred, 2, axis=1)]
+    y_pred = np.array([(p[-2], p[-1]) for p in pred_gen])
+    y_pred, y_true = [np.reshape(a, (a.shape[0],)) for a in np.split(y_pred, 2, axis=1)]
 
-    click.echo('\nAccuracy: {:.4f}'.format(np.average(pred == truth)))
+    click.echo('\nAccuracy: {:.4f}'.format(np.average(y_pred == y_true)))
 
-    click.echo('Quotation Accuracy: {:.4f}'.format(
-        np.average(np.where(pred == QUOTATION, 1, 0) == np.where(truth == QUOTATION, 1, 0))))
-    click.echo('Content Accuracy: {:.4f}'.format(
-        np.average(np.where(pred == CONTENT, 1, 0) == np.where(truth == CONTENT, 1, 0))))
-    click.echo('Header Accuracy: {:.4f}'.format(
-        np.average(np.where(pred == HEADER, 1, 0) == np.where(truth == HEADER, 1, 0))))
-    click.echo('Signature Accuracy: {:.4f}'.format(
-        np.average(np.where(pred == SIGNATURE, 1, 0) == np.where(truth == SIGNATURE, 1, 0))))
-    click.echo('Code Accuracy: {:.4f}'.format(
-        np.average(np.where(pred == CODE, 1, 0) == np.where(truth == CODE, 1, 0))))
+    click.echo('Binarized Quotation Accuracy: {:.4f}'.format(
+        np.average(np.where(y_pred == QUOTATION, 1, 0) == np.where(y_true == QUOTATION, 1, 0))))
+    click.echo('Binarized Content Accuracy: {:.4f}'.format(
+        np.average(np.where(y_pred == CONTENT, 1, 0) == np.where(y_true == CONTENT, 1, 0))))
+    click.echo('Binarized Header Accuracy: {:.4f}'.format(
+        np.average(np.where(y_pred == HEADER, 1, 0) == np.where(y_true == HEADER, 1, 0))))
+    click.echo('Binarized Signature Accuracy: {:.4f}'.format(
+        np.average(np.where(y_pred == SIGNATURE, 1, 0) == np.where(y_true == SIGNATURE, 1, 0))))
+    click.echo('Binarized Code Accuracy: {:.4f}'.format(
+        np.average(np.where(y_pred == CODE, 1, 0) == np.where(y_true == CODE, 1, 0))))
+
+    confusion_mat = tf.math.confusion_matrix(labels=y_true, predictions=y_pred,
+                                             num_classes=len(label_map_inverse)).numpy()
+    click.echo('\nConfusion matrix:')
+    with np.printoptions(precision=3, suppress=True, linewidth=9999, threshold=9999):
+        click.echo(confusion_mat / np.sum(confusion_mat, axis=1)[:, np.newaxis])
+    click.echo('Labels: ')
+    click.echo([l for l in label_map_inverse.values()])
 
 
 def load_mails(input_file):
@@ -112,6 +120,7 @@ def load_mails(input_file):
             continue
 
         labeled_mails.append(list(label_lines(mail_json)))
+
     click.echo('Labeled: {}'.format(len(labeled_mails)), err=True)
     click.echo('Unlabeled: {}'.format(len(unlabeled_mails)), err=True)
 
@@ -222,7 +231,8 @@ def predict_mails(mails, model_dir, verbose=True):
 
             if truth_exists:
                 if verbose:
-                    click.echo('[ {: >17} ] {}'.format('{} ({})'.format(label_map_inverse[cls], cls == ground_truth), l))
+                    click.echo('[ {: >17} ] {}'.format('{} ({})'.format(label_map_inverse[cls],
+                                                                        cls == ground_truth), l))
                 yield l, cls, ground_truth
             else:
                 if verbose:
@@ -251,16 +261,19 @@ def get_boundary_labels(y, filter_label):
     labels_end = np.zeros(len(y))
     in_block = False
     for i, l in enumerate(y):
-        if y[i] == filter_label and not in_block:
+        if i > 0 and in_block and l != filter_label:
+            for j in range(i, len(y)):
+                if (y[j] != filter_label and y[j] != EMPTY) or j == len(y) - 1:
+                    labels_end[i - 1] = 1
+                    in_block = False
+                    break
+
+        if not in_block and l == filter_label:
             labels_start[i] = 1
             in_block = True
-        if in_block:
-            j = i + 1
-            while j < len(y) and y[j] == EMPTY:
-                j += 1
-            if j == len(y) or y[j] != filter_label:
-                labels_end[i] = 1
-                in_block = False
+
+    if in_block:
+        labels_end[-1] = 1
 
     return labels_start, labels_end
 
@@ -275,41 +288,41 @@ def label_lines(doc):
         if annotations and offset > annotations[-1]['end_offset']:
             annotations.pop()
 
-        if not annotations or not l.rstrip():
-            yield l.rstrip(), None
+        l = l.rstrip()
+
+        if not annotations:
+            yield l, CONTENT if l else EMPTY
             offset = end_offset
             continue
 
         if offset < annotations[-1]['end_offset'] and end_offset > annotations[-1]['start_offset']:
-            yield l.rstrip(), label_map[annotations[-1]['label']]
+            yield l, label_map[annotations[-1]['label']] if l else EMPTY
         else:
-            yield l.rstrip(), None
+            yield l, CONTENT if l else EMPTY
 
         offset = end_offset
 
 
 def vectorize_lines(lines, callback):
     vectors = []
-    empty_lines = 0
+    empty_lines = 0.0
     labels = np.zeros(len(lines))
 
     for i, l_tup in enumerate(lines):
         if type(l_tup) is tuple:
             l, labels[i] = l_tup
-            if l_tup[1] is None:
-                labels[i] = CONTENT
         else:
             l = l_tup
 
         if not l.strip():
-            empty_lines += 1
+            empty_lines += 1.0
         else:
-            empty_lines = 0
+            empty_lines = 0.0
 
-        first_line = int(i == 0)
-        last_line = int(i == len(lines) - 1)
+        first_line = float(i == 0)
+        last_line = float(i == len(lines) - 1)
 
-        vectors.append((empty_lines, first_line, last_line) + callback(l))
+        vectors.append((empty_lines, first_line, last_line) + tuple(map(float, callback(l))))
 
     matrix = np.zeros((len(lines), len(vectors[0]) * 3))
     for i, v in enumerate(vectors):
@@ -320,19 +333,23 @@ def vectorize_lines(lines, callback):
     return matrix, labels
 
 
+# noinspection DuplicatedCode
 def vectorize_line_header(line):
     line_lower = line.lower()
     pos_word_start = re.search(r'^(?:from:|re:|aw:|fwd:|in article|in message)', line_lower) is not None
     pos_word_contains = re.search(r'(?:original message|fwd:|in reply to)', line_lower) is not None
     pos_word_end = re.search(r'(?:wrote:|said:|writes|commented:)$', line_lower) is not None
-    negative_words = re.search(r'(?:hi|hello|hey|dear|regards|thanks|thank you|sincerely|good luck|cheers)', line_lower) is not None
-    email = re.search(r'^([a-zA-Z0-9_\-\.]+)@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.)|(([a-zA-Z0-9\-]+\.)+))([a-zA-Z]{2,4}|[0-9]{1,3})(\]?)$', line_lower) is not None
+    negative_words = re.search(r'(?:hi|hello|hey|dear|regards|thanks|thank you|sincerely|good luck|cheers)',
+                               line_lower) is not None
+    email = re.search(r'^([a-zA-Z0-9_\-\.]+)@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.)|(([a-zA-Z0-9\-]+\.)+))' +
+                      r'([a-zA-Z]{2,4}|[0-9]{1,3})(\]?)$', line_lower) is not None
     num_words = len(re.split(r'\s+', line))
     end_character = {':': 1, ';': 2, '"': 3, "'": 3, '?': 4, '!': 5, '.': 6}.get(line[-1], 0) if line else 0
 
     return pos_word_start, pos_word_contains, pos_word_end, negative_words, email, num_words, end_character
 
 
+# noinspection DuplicatedCode
 def vectorize_line_signature(line):
     line_lower = line.lower()
     pos_words = re.search(r'(?:regards|thanks|thank you|sincerely|good luck|cheers)', line_lower) is not None
@@ -351,9 +368,11 @@ def vectorize_line_signature(line):
     return pos_words, num_words, end_character, special_symbol_pattern, case
 
 
+# noinspection DuplicatedCode
 def vectorize_line_code(line):
     line_lower = line.lower()
-    decl_keyword = re.search(r'(?:string|static|const|char|int|float|double|void|dim|typedef|struct|#include|import|#define|#undef|#ifdef|#endif)', line_lower) is not None
+    decl_keyword = re.search(r'(?:string|static|const|char|int|float|double|void|dim|typedef|struct|#include' +
+                             r'|import|#define|#undef|#ifdef|#endif)', line_lower) is not None
     stmt_keyword_1 = re.search(r'(?:\w\+\+|\+\+\w|\+=)', line_lower) is not None
     stmt_keyword_2 = re.search(r'(?:if|else|elif|endif|done|do|switch|case)', line_lower) is not None
     stmt_keyword_3 = re.search(r'(?:while|do\s*{|for|foreach|done)', line_lower) is not None
