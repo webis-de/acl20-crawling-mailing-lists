@@ -262,9 +262,7 @@ def train_model(training_data, output_model, loss_function='categorical_crossent
         'metrics': ['categorical_accuracy']
     }
 
-    effective_callbacks = []
-    if fine_tune is None:
-        effective_callbacks = [es_callback, cp_callback] if validation_data is not None else [cp_callback_no_val]
+    effective_callbacks = [es_callback, cp_callback] if validation_data is not None else [cp_callback_no_val]
     if tensorboard:
         effective_callbacks.append(tb_callback)
 
@@ -275,20 +273,21 @@ def train_model(training_data, output_model, loss_function='categorical_crossent
     val_seq = MailLinesSequence(validation_data, CONTEXT_SHAPE, labeled=True,
                                 batch_size=INF_BATCH_SIZE) if validation_data else None
 
-    segmenter.fit_generator(train_seq, epochs=20, validation_data=val_seq, shuffle=True, use_multiprocessing=False,
+    epochs = 20 if fine_tune is None else 10
+    segmenter.fit_generator(train_seq, epochs=epochs, validation_data=val_seq, shuffle=True, use_multiprocessing=False,
                             workers=train_seq.num_workers, max_queue_size=train_seq.max_queue_size,
                             callbacks=effective_callbacks)
 
-    if fine_tune is not None:
-        logger.info('Unfreezing layers')
-        for layer in segmenter.layers:
-            layer.trainable = True
-
-        effective_callbacks.append(cp_callback_no_val)
-        segmenter.compile(**compile_args)
-        segmenter.fit_generator(train_seq, epochs=5, validation_data=val_seq, shuffle=True, use_multiprocessing=False,
-                                workers=train_seq.num_workers, max_queue_size=train_seq.max_queue_size,
-                                callbacks=effective_callbacks)
+    # if fine_tune is not None:
+    #     logger.info('Unfreezing layers')
+    #     for layer in segmenter.layers:
+    #         layer.trainable = True
+    #
+    #     effective_callbacks.append(cp_callback_no_val)
+    #     segmenter.compile(**compile_args)
+    #     segmenter.fit_generator(train_seq, epochs=5, validation_data=val_seq, shuffle=True, use_multiprocessing=False,
+    #                             workers=train_seq.num_workers, max_queue_size=train_seq.max_queue_size,
+    #                             callbacks=effective_callbacks)
 
 
 def predict_raw_text(segmentation_model, message):
