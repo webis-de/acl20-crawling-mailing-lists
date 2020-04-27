@@ -15,7 +15,7 @@ from tensorflow.keras import models
 from tqdm import tqdm
 
 from parsing.message_segmenter import load_fasttext_model, predict_raw_text
-from util import util
+from util import mail_classification, util
 
 
 ANNOTATION_VERSION = 9
@@ -239,25 +239,7 @@ def _generate_docs(batch, index, segmentation_model, nlp, **kwargs):
 
         logger.debug('Segmenting message')
         lines = list(predict_raw_text(segmentation_model, raw_text))
-        labels = []
-        begin = 0
-        end = 0
-        prev_label = None
-        for line in lines:
-            if line[1] in ['<empty>', '<pad>']:
-                end += len(line[0])
-                continue
-
-            if prev_label is None:
-                prev_label = line[1]
-
-            if line[1] != prev_label:
-                labels.append((begin, end, prev_label))
-                begin = end
-
-            prev_label = line[1]
-            end += len(line[0])
-        labels.append((begin, end, prev_label))
+        labels = mail_classification.line_labels_to_char_pos(lines)
 
         logger.debug('Calculating segment stats')
         main_content = ''

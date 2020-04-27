@@ -244,10 +244,40 @@ def annotation_dict_to_lines(annotation_doc):
         offset = end_offset
 
 
+def line_labels_to_char_pos(line_labels):
+    """
+    Convert list of line labels to character position ranges.
+
+    :param line_labels: line labels
+    :return: list of character ranges and their labels
+    """
+    labels = []
+    begin = 0
+    end = 0
+    prev_label = None
+    for ll in line_labels:
+        if ll[1] in ['<empty>', '<pad>']:
+            end += len(ll[0])
+            continue
+
+        if prev_label is None:
+            prev_label = ll[1]
+
+        if ll[1] != prev_label:
+            labels.append((begin, end, prev_label))
+            begin = end
+
+        prev_label = ll[1]
+        end += len(ll[0])
+    labels.append((begin, end, prev_label))
+
+    return labels
+
+
 def get_annotations_from_dict(d):
     """
     Get annotations from Doccano either one of the two Doccano export formats.
-    This is a little compatibility hack make both formats work.
+    This is a little compatibility hack to make both formats work.
     """
     if 'annotations' in d:
         return d['annotations']

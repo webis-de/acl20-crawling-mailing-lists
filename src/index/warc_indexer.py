@@ -110,8 +110,8 @@ def _generate_docs(index, filename, nlp, counter):
     :param counter: Spark counter
     :return: Generator of index doc actions
     """
-    email_regex = re.compile(r'([a-zA-Z0-9_\-./+]+)@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.)|' +
-                             r'(([a-zA-Z0-9\-]+\.)+))([a-zA-Z]{2,}|[0-9]{1,3})(\]?)')
+    email_regex = re.compile(r'((?:[a-zA-Z0-9_\-./+]+)@(?:(?:\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.)|' +
+                             r'(?:(?:[a-zA-Z0-9\-]+\.)+))(?:[a-zA-Z]{2,}|[0-9]{1,3})(?:\]?))')
 
     def split_header(header_name, header_dict, split_regex=','):
         headers = [re.sub(r'\s+', ' ', h).strip()
