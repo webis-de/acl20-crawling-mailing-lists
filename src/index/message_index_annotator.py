@@ -162,7 +162,7 @@ def _start_spark_worker(slice_id, index, segmentation_model, fasttext_model, max
 
     logger.info('Retrieving initial batch (slice {}/{})'.format(slice_id, max_slices))
     es = util.get_es_client()
-    results = es.search(index=index, scroll='35m', size=250, body={
+    results = util.es_retry(es.search, index=index, scroll='35m', size=250, body={
         'sort': ['_id'],
         'slice': {
             'id': slice_id,
@@ -195,7 +195,7 @@ def _start_spark_worker(slice_id, index, segmentation_model, fasttext_model, max
             pass
 
         logger.info('Retrieving next batch (slice {}/{})'.format(slice_id, max_slices))
-        results = es.scroll(scroll_id=results['_scroll_id'], scroll='35m')
+        results = util.es_retry(es.scroll, scroll_id=results['_scroll_id'], scroll='35m')
 
 
 def _generate_docs(batch, index, segmentation_model, nlp, **kwargs):

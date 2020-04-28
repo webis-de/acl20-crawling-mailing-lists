@@ -52,17 +52,17 @@ def _start_spark_worker(slice_id, index, output_directory, segmentation_model, f
 
     logger.info('Retrieving initial batch (slice {}/{})'.format(slice_id, max_slices))
     es = util.get_es_client()
-    results = es.search(index=index, scroll='25m', size=kwargs.get('scroll_size', 2000), body={
-        "query": {
-            "wildcard": {"groupname": "gmane.*"}
-        },
-        "sort": ["groupname", "@timestamp"],
-        "_source": ["groupname", "@timestamp", "lang", "headers", "text_plain"],
-        "slice": {
-            "id": slice_id,
-            "max": max_slices,
-            "field": "@timestamp"
-        },
+    results = util.es_retry(
+        es.search, index=index, scroll='45m', request_timeout=240, size=kwargs.get('scroll_size', 2000), body={
+            "query": {
+                "wildcard": {"groupname": "gmane.*"}
+            },
+            "_source": ["groupname", "@timestamp", "lang", "headers", "text_plain"],
+            "slice": {
+                "id": slice_id,
+                "max": max_slices,
+                "field": "@timestamp"
+            },
     })
 
     email_regex = re.compile(r'((?:[a-zA-Z0-9_\-./+]+)@(?:(?:\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.)|' +
@@ -131,7 +131,7 @@ def _start_spark_worker(slice_id, index, output_directory, segmentation_model, f
             out_file.flush()
 
             logger.info('Retrieving next batch (slice {}/{})'.format(slice_id, max_slices))
-            results = es.scroll(scroll_id=results['_scroll_id'], scroll='25m')
+            results = util.es_retry(es.scroll, scroll_id=results['_scroll_id'], scroll='45m', request_timeout=240)
 
 
 if __name__ == '__main__':

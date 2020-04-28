@@ -4,7 +4,7 @@ import os
 import re
 import unicodedata
 
-from elasticsearch import Elasticsearch
+from elasticsearch import Elasticsearch, TransportError
 import pyspark
 
 
@@ -233,3 +233,19 @@ def retrieve_email_thread(es, index, message_id, restrict_to_same_group=True):
             break
 
     return sorted(docs, key=lambda d: d['sort'])
+
+
+def es_retry(func, *args, retries=3, **kwargs):
+    """
+    Call Elasticsearch function with parameters and return result.
+    Logs errors and retries up to `retries` times in case of failure.
+
+    :param func: Elasticsearch call
+    :param retries: number of retries
+    """
+    for _ in range(retries):
+        try:
+            return func(*args, **kwargs)
+        except TransportError as e:
+            get_logger(__name__).error(e)
+            pass

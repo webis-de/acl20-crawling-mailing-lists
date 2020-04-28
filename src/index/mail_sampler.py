@@ -5,10 +5,10 @@ import json
 import click
 from tqdm import tqdm
 
-from util.util import normalize_message_text, get_es_client, get_logger
+from util import util
 
 
-logger = get_logger(__name__)
+logger = util.get_logger(__name__)
 
 
 @click.command()
@@ -81,8 +81,8 @@ def main(index, output_file, **kwargs):
         }
 
     logger.info('Retrieving initial batch')
-    es = get_es_client()
-    results = es.search(index=index, scroll='10m', size=kwargs['scroll_size'], body=query)
+    es = util.get_es_client()
+    results = util.es_retry(es.search, index=index, scroll='10m', size=kwargs['scroll_size'], body=query)
 
     skip = kwargs['skip']
     if skip > 0:
@@ -126,13 +126,13 @@ def main(index, output_file, **kwargs):
                     output_jsonl.write('\n')
 
                 if output_text:
-                    output_text.write(normalize_message_text(text_plain))
+                    output_text.write(util.normalize_message_text(text_plain))
                     output_text.write('\n')
 
                 if num_samples >= kwargs['total_mails']:
                     break
 
-            results = es.scroll(scroll_id=results['_scroll_id'], scroll='10m')
+            results = util.es_retry(es.scroll, scroll_id=results['_scroll_id'], scroll='10m')
 
     if output_jsonl:
         output_jsonl.close()
