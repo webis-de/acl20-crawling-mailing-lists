@@ -3,12 +3,12 @@
 <head>
     <meta charset="utf-8">
     <title>Email Corpus Explorer</title>
-    <link rel="stylesheet" href="https://webis.de/css/style.css">
+    <link rel="stylesheet" href="https://assets.webis.de/css/style.css">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
-<script src="https://webis.de/commons/js/thirdparty/uikit/uikit.min.js"></script>
-<script src="https://webis.de/commons/js/thirdparty/uikit/uikit-icons.min.js"></script>
+<script src="https://assets.webis.de/js/thirdparty/uikit/uikit.min.js"></script>
+<script src="https://assets.webis.de/js/thirdparty/uikit/uikit-icons.min.js"></script>
 <main>
     <div class="uk-section uk-margin-medium-top uk-padding-remove-top">
         <div class="uk-container uk-width-1-1">
@@ -49,7 +49,7 @@
             </div>
             <div class="uk-margin">
                 <button type="button" class="uk-button uk-button-primary" id="query-button">Submit</button>
-                <div id="query-spinner" class="uk-hidden uk-margin-left" uk-spinner></div>
+                <div id="query-spinner" class="uk-hidden uk-margin-left" data-uk-spinner></div>
                 <div id="query-error-message" class="uk-hidden uk-alert-danger" data-uk-alert>
                     <a class="uk-alert-close" data-uk-close></a>
                     <p></p>
