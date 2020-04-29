@@ -290,18 +290,32 @@ def train_model(training_data, output_model, loss_function='categorical_crossent
     #                             callbacks=effective_callbacks)
 
 
-def predict_raw_text(segmentation_model, message):
+def predict_raw_text(segmentation_model, message, chunk_size=20000):
     """
     Predict segments of raw message text.
 
     :param segmentation_model: Trained segmentation model
     :param message: email message text
+    :param chunk_size: size of chunks to split larger messages into for segmentation
     :return: Generator of (message text, label text)
     """
 
-    pred_seq = MailLinesSequence(message, CONTEXT_SHAPE, labeled=False, input_is_raw_text=True,
-                                 batch_size=INF_BATCH_SIZE)
-    return _post_process_labels(pred_seq, segmentation_model.predict_generator(pred_seq))
+    # Split long emails into chunks (sacrifice context at chunk boundaries to keep things simple)
+    message = message.split('\n')
+    finished = False
+    for i in range(0, len(message), chunk_size):
+        end = min(i + chunk_size, len(message))
+        if len(message) - end < CONTEXT_SHAPE[0] * 2:
+            end = len(message)
+            finished = True
+
+        chunk = message[i:end]
+        pred_seq = MailLinesSequence('\n'.join(chunk), CONTEXT_SHAPE, labeled=False, input_is_raw_text=True,
+                                     batch_size=INF_BATCH_SIZE)
+        yield from _post_process_labels(pred_seq, segmentation_model.predict_generator(pred_seq))
+
+        if finished:
+            break
 
 
 def reformat_raw_text_recursive(segmentation_model, email, exclude_classes=None, max_depth=10):

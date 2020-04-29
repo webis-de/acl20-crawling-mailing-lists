@@ -23,8 +23,9 @@ logger = util.get_logger(__name__)
 @click.argument('output_directory')
 @click.argument('segmentation_model', type=click.Path(exists=True, dir_okay=False))
 @click.argument('fasttext_model', type=click.Path(exists=True, dir_okay=False))
-@click.option('-s', '--slices', help='Number of Elasticsearch scroll slices', type=int, default=100)
-@click.option('-x', '--scroll-size', help='Scroll size', type=int, default=2000)
+@click.option('-s', '--slices', help='Number of Elasticsearch scroll slices', type=int, default=200)
+@click.option('-x', '--scroll-size', help='Scroll size (should be quite small to avoid scroll context timeouts)',
+              type=int, default=50)
 @click.option('-p', '--output-file-prefix', help='Export index name', default='webis_gmane_corpus_2019')
 def main(index, output_directory, segmentation_model, fasttext_model, **kwargs):
     """
@@ -53,7 +54,7 @@ def _start_spark_worker(slice_id, index, output_directory, segmentation_model, f
     logger.info('Retrieving initial batch (slice {}/{})'.format(slice_id, max_slices))
     es = util.get_es_client()
     results = util.es_retry(
-        es.search, index=index, scroll='45m', request_timeout=240, size=kwargs.get('scroll_size', 2000), body={
+        es.search, index=index, scroll='1h', request_timeout=360, size=kwargs.get('scroll_size', 2000), body={
             "query": {
                 "wildcard": {"groupname": "gmane.*"}
             },
@@ -62,8 +63,8 @@ def _start_spark_worker(slice_id, index, output_directory, segmentation_model, f
                 "id": slice_id,
                 "max": max_slices,
                 "field": "@timestamp"
-            },
-    })
+            }
+        })
 
     email_regex = re.compile(r'((?:[a-zA-Z0-9_\-./+]+)@(?:(?:\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.)|' +
                              r'(?:(?:[a-zA-Z0-9\-]+\.)+))(?:[a-zA-Z]{2,}|[0-9]{1,3})(?:\]?))')
@@ -79,59 +80,68 @@ def _start_spark_worker(slice_id, index, output_directory, segmentation_model, f
             return s
 
     output_file_prefix = kwargs.get('output_file_prefix', 'webis_gmane_corpus_2019')
+    output_buffer = b''
 
-    out_file_name = os.path.join(output_directory, '{}_part{:03d}.ndjson.gz'.format(output_file_prefix, slice_id))
-    with open(out_file_name, 'wb') as out_file:
-        while results['hits']['hits']:
-            batch = results['hits']['hits']
+    def flush_out_file():
+        nonlocal output_buffer
+        out_file.write(gzip.compress(output_buffer, compresslevel=9))
+        output_buffer = b''
+        out_file.flush()
 
-            for doc in batch:
-                src = doc['_source']
-                # Anonymise email addresses
-                src['body'] = email_regex.sub(email_replacement, src.pop('text_plain'))
-                src['headers'] = {k: src['headers'][k] for k in src['headers']
-                                  if src['headers'][k] and k in
-                                  {'message_id', 'from', 'to', 'cc', 'in_reply_to', 'references', 'list_id'}}
+    try:
+        out_file_name = os.path.join(output_directory, '{}_part{:03d}.ndjson.gz'.format(output_file_prefix, slice_id))
+        with open(out_file_name, 'wb') as out_file:
+            while results['hits']['hits']:
+                batch = results['hits']['hits']
 
-                for h in src['headers']:
-                    if h in {'cc', 'references'}:
-                        if type(src['headers'][h]) is not list:
-                            src['headers'][h] = [src['headers'][h]]
-                            src['headers'][h] = [extract_email_addr(x) for x in src['headers'][h]]
+                for doc in batch:
+                    src = doc['_source']
+                    # Anonymise email addresses
+                    src['body'] = email_regex.sub(email_replacement, src.pop('text_plain'))
+                    src['headers'] = {k: src['headers'][k] for k in src['headers']
+                                      if src['headers'][k] and k in
+                                      {'message_id', 'from', 'to', 'cc', 'in_reply_to', 'references', 'list_id'}}
 
-                    # Keep only email address in from
-                    if h == 'from':
-                        src['headers'][h] = extract_email_addr(src['headers'][h])
+                    for h in src['headers']:
+                        if h in {'cc', 'references'}:
+                            if type(src['headers'][h]) is not list:
+                                src['headers'][h] = [src['headers'][h]]
+                                src['headers'][h] = [extract_email_addr(x) for x in src['headers'][h]]
 
-                    if type(src['headers'][h]) is list:
-                        src['headers'][h] = [email_regex.sub(email_replacement, x) for x in src['headers'][h]]
-                    elif h != 'list_id':
-                        src['headers'][h] = email_regex.sub(email_replacement, src['headers'][h])
+                        # Keep only email address in from
+                        if h == 'from':
+                            src['headers'][h] = extract_email_addr(src['headers'][h])
 
-                # Rename fields
-                src['headers']['date'] = src.pop('@timestamp')
-                src['group'] = src.pop('groupname')
+                        if type(src['headers'][h]) is list:
+                            src['headers'][h] = [email_regex.sub(email_replacement, x) for x in src['headers'][h]]
+                        elif h != 'list_id':
+                            src['headers'][h] = email_regex.sub(email_replacement, src['headers'][h])
 
-                src['segments'] = []
-                try:
-                    if len(src['body']) < 100000:
-                        logger.info('Recalculating segments.')
+                    # Rename fields
+                    src['headers']['date'] = src.pop('@timestamp')
+                    src['group'] = src.pop('groupname')
+
+                    src['segments'] = []
+                    try:
                         lines = message_segmenter.predict_raw_text(segmentation_model, src['body'])
                         src['segments'] = [{'start': s[0], 'end': s[1], 'label': s[2]}
                                            for s in mail_classification.line_labels_to_char_pos(lines)]
-                    else:
-                        logger.warning('Skipping segmentation of very long email.')
-                except Exception as e:
-                    logger.error('Error segmenting message: {}'.format(e))
+                    except Exception as e:
+                        logger.error('Error segmenting message: {}'.format(e))
 
-                index_action = {'index': {'_id': doc['_id']}}
-                json_out = json.dumps(index_action) + '\n' + json.dumps(src) + '\n'
-                out_file.write(gzip.compress(json_out.encode(), compresslevel=9))
+                    index_action = {'index': {'_id': doc['_id']}}
+                    output_buffer += (json.dumps(index_action) + '\n' + json.dumps(src) + '\n').encode()
 
-            out_file.flush()
+                    # Flush if larger than 10MiB
+                    if len(output_buffer) > 10 * 1024 * 1024:
+                        flush_out_file()
 
-            logger.info('Retrieving next batch (slice {}/{})'.format(slice_id, max_slices))
-            results = util.es_retry(es.scroll, scroll_id=results['_scroll_id'], scroll='45m', request_timeout=240)
+                logger.info('Retrieving next batch (slice {}/{})'.format(slice_id, max_slices))
+                results = util.es_retry(es.scroll, scroll_id=results['_scroll_id'], scroll='1h', request_timeout=360)
+    finally:
+        flush_out_file()
+        out_file.close()
+        es.clear_scroll(scroll_id=results['_scroll_id'])
 
 
 if __name__ == '__main__':

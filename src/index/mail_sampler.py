@@ -92,47 +92,50 @@ def main(index, output_file, **kwargs):
     num_samples = 0
     num_skipped = 0
 
-    with tqdm(desc='Calculating progress', unit=' messages') as progress_bar:
-        while num_samples < kwargs['total_mails'] and len(results['hits']['hits']) > 0:
-            for hit in results['hits']['hits']:
-                if skip > 0 and num_skipped < skip:
-                    progress_bar.set_description('Skipping messages')
-                    progress_bar.total = skip
-                    num_skipped += 1
+    try:
+        with tqdm(desc='Calculating progress', unit=' messages') as progress_bar:
+            while num_samples < kwargs['total_mails'] and len(results['hits']['hits']) > 0:
+                for hit in results['hits']['hits']:
+                    if skip > 0 and num_skipped < skip:
+                        progress_bar.set_description('Skipping messages')
+                        progress_bar.total = skip
+                        num_skipped += 1
+                        progress_bar.update()
+                        continue
+                    elif (skip == 0 or num_skipped >= skip) and num_samples == 0:
+                        progress_bar.set_description('Sampling messages')
+                        progress_bar.total = kwargs['total_mails']
+                        progress_bar.n = 0
+                        progress_bar.last_print_n = 0
+                        progress_bar.update(0)
+
+                    src = hit['_source']
+                    text_plain = src['text_plain']
+
+                    prev_samples = sampled_groups.get(src['groupname'], 0)
+                    if kwargs['group_limit'] and prev_samples > kwargs['group_limit']:
+                        continue
+                    sampled_groups[src['groupname']] = prev_samples + 1
+
+                    num_samples += 1
                     progress_bar.update()
-                    continue
-                elif (skip == 0 or num_skipped >= skip) and num_samples == 0:
-                    progress_bar.set_description('Sampling messages')
-                    progress_bar.total = kwargs['total_mails']
-                    progress_bar.n = 0
-                    progress_bar.last_print_n = 0
-                    progress_bar.update(0)
 
-                src = hit['_source']
-                text_plain = src['text_plain']
+                    if output_jsonl:
+                        json.dump({'text': text_plain,
+                                   'meta': {k: src[k] for k in src.keys() if k not in ['text_plain', 'text_html']},
+                                   'labels': []}, output_jsonl)
+                        output_jsonl.write('\n')
 
-                prev_samples = sampled_groups.get(src['groupname'], 0)
-                if kwargs['group_limit'] and prev_samples > kwargs['group_limit']:
-                    continue
-                sampled_groups[src['groupname']] = prev_samples + 1
+                    if output_text:
+                        output_text.write(util.normalize_message_text(text_plain))
+                        output_text.write('\n')
 
-                num_samples += 1
-                progress_bar.update()
+                    if num_samples >= kwargs['total_mails']:
+                        break
 
-                if output_jsonl:
-                    json.dump({'text': text_plain,
-                               'meta': {k: src[k] for k in src.keys() if k not in ['text_plain', 'text_html']},
-                               'labels': []}, output_jsonl)
-                    output_jsonl.write('\n')
-
-                if output_text:
-                    output_text.write(util.normalize_message_text(text_plain))
-                    output_text.write('\n')
-
-                if num_samples >= kwargs['total_mails']:
-                    break
-
-            results = util.es_retry(es.scroll, scroll_id=results['_scroll_id'], scroll='10m')
+                results = util.es_retry(es.scroll, scroll_id=results['_scroll_id'], scroll='10m')
+    finally:
+        es.clear_scroll(scroll_id=results['_scroll_id'])
 
     if output_jsonl:
         output_jsonl.close()

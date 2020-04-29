@@ -178,24 +178,27 @@ def _start_spark_worker(slice_id, index, segmentation_model, fasttext_model, max
         }
     })
 
-    while results['hits']['hits']:
-        logger.info('Processing batch.')
-        doc_gen = _generate_docs(results['hits']['hits'], index, segmentation_model, nlp,
-                                 arg_lexicon=arg_lexicon, args_topic_models=topic_models, progress_bar=False)
-        try:
-            if kwargs.get('dry_run'):
-                while True:
-                    next(doc_gen)
-            else:
-                # only start bulk request if generator has at least one element
-                peek = next(doc_gen)
-                helpers.bulk(es, itertools.chain([peek], doc_gen))
-            logger.info('Finished indexing batch.')
-        except StopIteration:
-            pass
+    try:
+        while results['hits']['hits']:
+            logger.info('Processing batch.')
+            doc_gen = _generate_docs(results['hits']['hits'], index, segmentation_model, nlp,
+                                     arg_lexicon=arg_lexicon, args_topic_models=topic_models, progress_bar=False)
+            try:
+                if kwargs.get('dry_run'):
+                    while True:
+                        next(doc_gen)
+                else:
+                    # only start bulk request if generator has at least one element
+                    peek = next(doc_gen)
+                    helpers.bulk(es, itertools.chain([peek], doc_gen))
+                logger.info('Finished indexing batch.')
+            except StopIteration:
+                pass
 
-        logger.info('Retrieving next batch (slice {}/{})'.format(slice_id, max_slices))
-        results = util.es_retry(es.scroll, scroll_id=results['_scroll_id'], scroll='35m')
+            logger.info('Retrieving next batch (slice {}/{})'.format(slice_id, max_slices))
+            results = util.es_retry(es.scroll, scroll_id=results['_scroll_id'], scroll='35m')
+    finally:
+        es.clear_scroll(scroll_id=results['_scroll_id'])
 
 
 def _generate_docs(batch, index, segmentation_model, nlp, **kwargs):

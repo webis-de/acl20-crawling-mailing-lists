@@ -4,7 +4,7 @@ import os
 import re
 import unicodedata
 
-from elasticsearch import Elasticsearch, TransportError
+from elasticsearch import Elasticsearch, ConnectionError as ESConnectionError
 import pyspark
 
 
@@ -238,14 +238,19 @@ def retrieve_email_thread(es, index, message_id, restrict_to_same_group=True):
 def es_retry(func, *args, retries=3, **kwargs):
     """
     Call Elasticsearch function with parameters and return result.
-    Logs errors and retries up to `retries` times in case of failure.
+    Logs connection errors and retries up to `retries` times in case of failure.
 
     :param func: Elasticsearch call
     :param retries: number of retries
     """
+    ex = None
     for _ in range(retries):
         try:
             return func(*args, **kwargs)
-        except TransportError as e:
+        except ESConnectionError as e:
             get_logger(__name__).error(e)
+            ex = e
             pass
+
+    # Too many retries, bail out
+    raise ex
