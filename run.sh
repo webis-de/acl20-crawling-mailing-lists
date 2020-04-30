@@ -25,7 +25,7 @@ elif [ "$1" == "spark" ]; then
     shift
     pushd "${SRC_PATH}" && zip -r "${TMP_PATH}/py-files.zip" ./* && popd || exit 1
     exec spark-submit --master yarn --py-files "${TMP_PATH}/py-files.zip" \
-        --num-executors 100 --executor-cores 10 --executor-memory 15G --conf spark.task.cpus=5 \
+        --num-executors 200 --executor-cores 8 --executor-memory 15G --conf spark.task.cpus=4 \
         --conf spark.yarn.executor.memoryOverhead=4096 "$@"
 elif [ -x "$1" ]; then
     exec "$@"

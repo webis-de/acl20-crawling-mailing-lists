@@ -45,11 +45,11 @@ def main(index, output_directory, segmentation_model, fasttext_model, **kwargs):
     messages = sc.range(kwargs['scroll_slices']).flatMap(partial(_map_messages, max_slices=kwargs['scroll_slices'],
                                                                  scroll_size=kwargs['scroll_size'], index=index))
     num_msg = util.get_es_client().count(index, body={"query": {"wildcard": {"groupname": "gmane.*"}}})['count']
-    messages.partitionBy(min(1, num_msg // 1000))
+    messages.partitionBy(max(1, num_msg // 1000))
     messages = messages.mapPartitions(partial(_predict_segments, segmentation_model=segmentation_model,
                                               fasttext_model=fasttext_model),
                                       preservesPartitioning=True)
-    messages.partitionBy(min(1, num_msg // 10000))
+    messages.partitionBy(max(1, num_msg // 10000))
     messages = messages.mapPartitionsWithIndex(partial(_create_output_segments, output_base_dir=output_directory,
                                                        num_output_partitions=kwargs['output_partitions']))
 
