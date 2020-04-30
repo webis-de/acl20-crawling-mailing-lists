@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from datetime import datetime
+import gc
 import json
 import os
 import re
@@ -96,12 +97,12 @@ def predict(model, fasttext_model, test_data, **kwargs):
         if len(pred_seq) == 0:
             break
 
-        predictions = segmenter.predict_generator(pred_seq,
-                                                  verbose=(not to_stdout),
-                                                  steps=(None if not to_stdout else 10),
-                                                  use_multiprocessing=True,
-                                                  workers=pred_seq.num_workers,
-                                                  max_queue_size=pred_seq.max_queue_size)
+        predictions = segmenter.predict(pred_seq,
+                                        verbose=(not to_stdout),
+                                        steps=(None if not to_stdout else 10),
+                                        use_multiprocessing=True,
+                                        workers=pred_seq.num_workers,
+                                        max_queue_size=pred_seq.max_queue_size)
         export_mail_annotation_spans(predictions, pred_seq, output_json, verbose=to_stdout)
 
         if output_json:
@@ -290,7 +291,7 @@ def train_model(training_data, output_model, loss_function='categorical_crossent
     #                             callbacks=effective_callbacks)
 
 
-def predict_raw_text(segmentation_model, message, chunk_size=20000):
+def predict_raw_text(segmentation_model, message, chunk_size=15000):
     """
     Predict segments of raw message text.
 
@@ -302,6 +303,7 @@ def predict_raw_text(segmentation_model, message, chunk_size=20000):
 
     # Split long emails into chunks (sacrifice context at chunk boundaries to keep things simple)
     message = message.split('\n')
+
     finished = False
     for i in range(0, len(message), chunk_size):
         end = min(i + chunk_size, len(message))
@@ -312,10 +314,17 @@ def predict_raw_text(segmentation_model, message, chunk_size=20000):
         chunk = message[i:end]
         pred_seq = MailLinesSequence('\n'.join(chunk), CONTEXT_SHAPE, labeled=False, input_is_raw_text=True,
                                      batch_size=INF_BATCH_SIZE)
-        yield from _post_process_labels(pred_seq, segmentation_model.predict_generator(pred_seq))
+        yield from _post_process_labels(pred_seq, segmentation_model.predict(pred_seq))
+
+        del pred_seq
+        gc.collect()
 
         if finished:
             break
+
+    del message
+    gc.collect()
+    K.clear_session()
 
 
 def reformat_raw_text_recursive(segmentation_model, email, exclude_classes=None, max_depth=10):
