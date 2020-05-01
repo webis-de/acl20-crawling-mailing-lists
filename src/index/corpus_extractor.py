@@ -24,8 +24,9 @@ logger = util.get_logger(__name__)
 @click.argument('output_directory')
 @click.argument('segmentation_model', type=click.Path(exists=True, dir_okay=False))
 @click.argument('fasttext_model', type=click.Path(exists=True, dir_okay=False))
-@click.option('-s', '--scroll-slices', help='Number of Elasticsearch scroll slices', type=int, default=100)
-@click.option('-x', '--scroll-size', help='Scroll size', type=int, default=100)
+@click.option('-s', '--scroll-slices', help='Number of Elasticsearch scroll slices', type=int, default=200)
+@click.option('-x', '--scroll-size', help='Scroll size (should be low to keep search context alive)',
+              type=int, default=60)
 @click.option('-o', '--output-partitions', help='Number of output partitions', type=int, default=200)
 @click.option('-p', '--output-file-prefix', help='Export index name', default='webis_gmane_corpus_2019')
 def main(index, output_directory, segmentation_model, fasttext_model, **kwargs):
@@ -45,11 +46,11 @@ def main(index, output_directory, segmentation_model, fasttext_model, **kwargs):
     messages = sc.range(kwargs['scroll_slices']).flatMap(partial(_map_messages, max_slices=kwargs['scroll_slices'],
                                                                  scroll_size=kwargs['scroll_size'], index=index))
     num_msg = util.get_es_client().count(index, body={"query": {"wildcard": {"groupname": "gmane.*"}}})['count']
-    messages.partitionBy(max(1, num_msg // 1000))
+    # Create many small partitions to avoid context timeouts when segmentation is blocking the pipeline
+    messages.partitionBy(max(1, num_msg // kwargs['scroll_size'] // 2))
     messages = messages.mapPartitions(partial(_predict_segments, segmentation_model=segmentation_model,
-                                              fasttext_model=fasttext_model),
-                                      preservesPartitioning=True)
-    messages.partitionBy(max(1, num_msg // 10000))
+                                              fasttext_model=fasttext_model), preservesPartitioning=True)
+    messages.coalesce(min(num_msg, 10000))
     messages = messages.mapPartitionsWithIndex(partial(_create_output_segments, output_base_dir=output_directory,
                                                        num_output_partitions=kwargs['output_partitions']))
 
@@ -68,7 +69,7 @@ def _map_messages(slice_id, max_slices, scroll_size, index):
     logger.info('Retrieving initial batch (slice {}/{})'.format(slice_id, max_slices))
     es = util.get_es_client()
     results = util.es_retry(
-        es.search, index=index, scroll='30m', request_timeout=360, size=scroll_size, body={
+        es.search, index=index, scroll='3h', request_timeout=360, size=scroll_size, body={
             "query": {
                 "wildcard": {"groupname": "gmane.*"}
             },
@@ -127,45 +128,62 @@ def _map_messages(slice_id, max_slices, scroll_size, index):
                 yield doc['_id'], src
 
             logger.info('Retrieving next batch (slice {}/{})'.format(slice_id, max_slices))
-            results = util.es_retry(es.scroll, scroll_id=results['_scroll_id'], scroll='30m', request_timeout=360)
+            results = util.es_retry(es.scroll, scroll_id=results['_scroll_id'], scroll='3h', request_timeout=360)
 
     finally:
         es.clear_scroll(scroll_id=results['_scroll_id'])
 
 
+__segmentation_model = None
+
+
 def _predict_segments(messages, segmentation_model, fasttext_model):
-    logger.info('Loading segmentation model')
-    mail_classification.load_fasttext_model(fasttext_model)
-    segmentation_model = models.load_model(segmentation_model)
+    global __segmentation_model
+    if __segmentation_model is None:
+        logger.info('Loading segmentation model')
+        mail_classification.load_fasttext_model(fasttext_model)
+        __segmentation_model = models.load_model(segmentation_model)
 
     logger.info('Predicting segments')
     for msg_id, msg in messages:
         msg['segments'] = []
         try:
-            lines = message_segmenter.predict_raw_text(segmentation_model, msg['body'])
-            msg['segments'] = [{'start': s[0], 'end': s[1], 'label': s[2]}
-                               for s in mail_classification.line_labels_to_char_pos(lines)]
+            if len(msg) < 500000:
+                lines = message_segmenter.predict_raw_text(__segmentation_model, msg['body'])
+                msg['segments'] = [{'start': s[0], 'end': s[1], 'label': s[2]}
+                                   for s in mail_classification.line_labels_to_char_pos(lines)]
+            else:
+                logger.warning('Skipped segmentation of excessively long message of {} bytes.'.format(len(msg)))
         except Exception as e:
             logger.error('Error segmenting message: {}'.format(e))
 
         index_action = {'index': {'_id': msg_id}}
-        yield (json.dumps(index_action) + '\n' + json.dumps(msg) + '\n').encode()
+        yield msg_id, (json.dumps(index_action) + '\n' + json.dumps(msg) + '\n').encode()
 
 
 def _create_output_segments(part_id, message_bytes_gen, output_base_dir, num_output_partitions):
-    out_dir = os.path.join(output_base_dir, 'segment_{:05d}'.format(part_id % num_output_partitions))
+    out_dir = os.path.join(output_base_dir, 'segment_{:04d}'.format(part_id % num_output_partitions))
     os.makedirs(out_dir, exist_ok=True)
 
-    with gzip.open(os.path.join(out_dir, 'part_{:08d}.ndjson.gz'.format(part_id)), 'wb', compresslevel=9) as f:
-        for message in message_bytes_gen:
+    out_file = os.path.join(out_dir, 'part_{:05d}.ndjson.gz'.format(part_id))
+    f = gzip.open(out_file, 'wb', compresslevel=9)
+    try:
+        for i, (_, message) in enumerate(message_bytes_gen):
+            if i > 0 and i % 1000 == 0:
+                # Start new gzip member segment every 1k lines
+                f.close()
+                f = gzip.open(out_file, 'ab', compresslevel=9)
+
             f.write(message)
+    finally:
+        f.close()
 
     return []
 
 
 def _combine_output_segments(output_part_id, output_base_dir, output_file_prefix):
-    segment_dir = os.path.join(output_base_dir, 'segment_{:05d}'.format(output_part_id))
-    out_file = os.path.join(output_base_dir, '{}_part{:04d}.ndjson.gz'.format(output_file_prefix, output_part_id))
+    segment_dir = os.path.join(output_base_dir, 'segment_{:04d}'.format(output_part_id))
+    out_file = os.path.join(output_base_dir, '{}_part{:05d}.ndjson.gz'.format(output_file_prefix, output_part_id))
 
     if not os.path.isdir(segment_dir):
         logger.error('Segment dir {} does not exist.'.format(segment_dir))
