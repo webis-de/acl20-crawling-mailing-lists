@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 
+from base64 import b64encode
 from collections import defaultdict
 import itertools
 from functools import partial
+from hashlib import sha256
+import os
 import re
+import site
+import sys
 from time import time
 
-from argument_esa_model.esa import ESA
 import click
 from elasticsearch import helpers
 import spacy
@@ -18,7 +22,7 @@ from parsing.message_segmenter import load_fasttext_model, predict_raw_text
 from util import mail_classification, util
 
 
-ANNOTATION_VERSION = 9
+ANNOTATION_VERSION = 10
 
 logger = util.get_logger(__name__)
 
@@ -27,11 +31,10 @@ logger = util.get_logger(__name__)
 @click.argument('index')
 @click.argument('segmentation_model', type=click.Path(exists=True, dir_okay=False))
 @click.argument('fasttext_model', type=click.Path(exists=True, dir_okay=False))
-@click.option('-s', '--slices', help='Number of Elasticsearch scroll slices', type=int, default=100)
-@click.option('-a', '--arg-lexicon', help='Arguing Lexicon directory (Somasundaran et al., 2007)',
-              type=click.Path(exists=True, file_okay=False))
-@click.option('-t', '--args-topic-model', multiple=True, type=click.Path(exists=True, dir_okay=False))
+@click.option('-s', '--scroll-slices', help='Number of Elasticsearch scroll slices', type=int, default=200)
+@click.option('-x', '--scroll-size', help='Scroll size', type=int, default=150)
 @click.option('-n', '--dry-run', help='Dry run (do not index anything)', is_flag=True)
+@click.option('-a', '--anonymize', help='Anonymize email addresses', is_flag=True)
 def main(index, segmentation_model, fasttext_model, **kwargs):
     """
     Automatic message index annotation tool.
@@ -48,7 +51,7 @@ def main(index, segmentation_model, fasttext_model, **kwargs):
     start_indexer(index, segmentation_model, fasttext_model, **kwargs)
 
 
-def start_indexer(index, segmentation_model, fasttext_model, slices=1, **kwargs):
+def start_indexer(index, segmentation_model, fasttext_model, **kwargs):
     """
     Start annotation indexer.
 
@@ -60,8 +63,6 @@ def start_indexer(index, segmentation_model, fasttext_model, slices=1, **kwargs)
     Keyword Args:
         dry_run (bool): Perform dry run, do not actually index anything
         progress_bar (bool): Show indexing progress bar
-        arg_lexicon (str): Path to Arguing lexicon (Somasundaran, et al., 2007)
-        args_topic_models (str): Args.me ESA topic model
     """
 
     if kwargs.get('dry_run'):
@@ -81,15 +82,15 @@ def start_indexer(index, segmentation_model, fasttext_model, slices=1, **kwargs)
             'segments': {
                 'type': 'nested',
                 'properties': {
-                    'label': {
-                        'type': 'keyword'
-                    },
                     'begin': {
                         'type': 'integer'
                     },
                     'end': {
                         'type': 'integer'
-                    }
+                    },
+                    'label': {
+                        'type': 'keyword'
+                    },
                 }
             },
             'label_stats': {
@@ -100,15 +101,6 @@ def start_indexer(index, segmentation_model, fasttext_model, slices=1, **kwargs)
             },
             'annotation_version': {
                 'type': 'short'
-            },
-            'arg_classes': {
-                'type': 'keyword'
-            },
-            'arg_classes_matched_regex': {
-                'type': 'keyword'
-            },
-            'topics': {
-                'type': 'keyword'
             }
         },
         'dynamic': True,
@@ -130,39 +122,36 @@ def start_indexer(index, segmentation_model, fasttext_model, slices=1, **kwargs)
         ]
     })
 
-    if kwargs.get('arg_lexicon'):
-        logger.info('Loading Arguing Lexicon')
-        kwargs['arg_lexicon'] = util.load_arglex(kwargs.get('arg_lexicon'))
-
     sc = util.get_spark_context('Mail Annotation Indexer')
-    sc.range(0, slices).foreach(partial(_start_spark_worker,
-                                        index=index, segmentation_model=segmentation_model,
-                                        fasttext_model=fasttext_model, max_slices=slices, **kwargs))
+    sc.range(0, kwargs.get('scroll_slices', 2)).foreach(
+        partial(_start_spark_worker, index=index, segmentation_model=segmentation_model,
+                fasttext_model=fasttext_model, **kwargs))
 
 
-def _start_spark_worker(slice_id, index, segmentation_model, fasttext_model, max_slices=1, **kwargs):
+def _start_spark_worker(slice_id, index, segmentation_model, fasttext_model, **kwargs):
+    # Fix to circumvent Yarn's buggy HOME override
+    os.environ['HOME'] = os.environ.get('HADOOP_HOME', os.environ['HOME'])
+
     logger.info('Loading SpaCy')
-    nlp = spacy.load('en_core_web_sm')
+    if not spacy.util.is_package('en_core_web_sm'):
+        oldbase = site.USER_BASE
+        site.USER_BASE = os.path.join(os.environ['HOME'], '.local')
+        site.USER_SITE = site.USER_SITE.replace(oldbase, site.USER_BASE)
+        os.makedirs(site.USER_SITE, exist_ok=True)
+        sys.path.insert(0, site.USER_SITE)
+        spacy.cli.download('en_core_web_sm')
+    import en_core_web_sm
+    nlp = en_core_web_sm.load()
     nlp.add_pipe(LanguageDetector(), name='language_detector', last=True)
 
     logger.info('Loading segmentation model')
     load_fasttext_model(fasttext_model)
     segmentation_model = models.load_model(segmentation_model)
 
-    arg_lexicon = kwargs.get('arg_lexicon')
-    if arg_lexicon:
-        logger.info('Compiling arguing lexicon regex list')
-        arg_lexicon = [(re.compile(r'\b' + regex + r'\b', re.IGNORECASE), regex, cls)
-                       for regex, cls in arg_lexicon]
-
-    topic_models = []
-    if kwargs.get('args_topic_models'):
-        for path in kwargs.get('args_topic_models'):
-            topic_models.append(ESA(path))
-
+    max_slices = kwargs.get('scroll_slices', 2)
     logger.info('Retrieving initial batch (slice {}/{})'.format(slice_id, max_slices))
     es = util.get_es_client()
-    results = util.es_retry(es.search, index=index, scroll='35m', size=250, body={
+    results = util.es_retry(es.search, index=index, scroll='45m', size=kwargs['scroll_size'], body={
         'sort': ['_id'],
         'slice': {
             'id': slice_id,
@@ -171,6 +160,9 @@ def _start_spark_worker(slice_id, index, segmentation_model, fasttext_model, max
         },
         'query': {
             'bool': {
+                "must": {
+                    "wildcard": {"groupname": "gmane.*"}
+                },
                 'must_not': {
                     'range': {'annotation_version': {'gte': ANNOTATION_VERSION}}
                 }
@@ -182,7 +174,7 @@ def _start_spark_worker(slice_id, index, segmentation_model, fasttext_model, max
         while results['hits']['hits']:
             logger.info('Processing batch.')
             doc_gen = _generate_docs(results['hits']['hits'], index, segmentation_model, nlp,
-                                     arg_lexicon=arg_lexicon, args_topic_models=topic_models, progress_bar=False)
+                                     progress_bar=False, anonymize=kwargs.get('anonymize', False))
             try:
                 if kwargs.get('dry_run'):
                     while True:
@@ -196,12 +188,12 @@ def _start_spark_worker(slice_id, index, segmentation_model, fasttext_model, max
                 pass
 
             logger.info('Retrieving next batch (slice {}/{})'.format(slice_id, max_slices))
-            results = util.es_retry(es.scroll, scroll_id=results['_scroll_id'], scroll='35m')
+            results = util.es_retry(es.scroll, scroll_id=results['_scroll_id'], scroll='45m')
     finally:
         es.clear_scroll(scroll_id=results['_scroll_id'])
 
 
-def _generate_docs(batch, index, segmentation_model, nlp, **kwargs):
+def _generate_docs(batch, index, segmentation_model, nlp, progress_bar=False, anonymize=False):
     """
     Generate Elasticsearch index docs.
 
@@ -215,8 +207,22 @@ def _generate_docs(batch, index, segmentation_model, nlp, **kwargs):
         See :func:`_start_spark_worker`
     """
 
-    if kwargs.get('progress_bar'):
+    if progress_bar:
         batch = tqdm(batch, desc='Preparing documents in batch', unit='docs', total=len(batch), leave=False)
+
+    email_regex = re.compile(r'((?:[a-zA-Z0-9_\-./+]+)@(?:(?:\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.)|' +
+                             r'(?:(?:[a-zA-Z0-9\-]+\.)+))(?:[a-zA-Z]{2,}|[0-9]{1,3})(?:\]?))')
+
+    def email_replacement(e):
+        return b64encode(sha256(e.group().encode()).digest())[:16].decode() + '@example.com'
+
+    def extract_email_addr(s):
+        try:
+            return email_regex.search(s).group()
+        except (TypeError, AttributeError):
+            # Use value as is if not an email address
+            logger.warning('Expected email address in "{}", but couldn\'t find any.'.format(s))
+            return s
 
     for doc in batch:
         doc_id = doc['_id']
@@ -228,81 +234,89 @@ def _generate_docs(batch, index, segmentation_model, nlp, **kwargs):
             logger.error('{}: document annotation version greater or equal {}.'.format(doc_id, ANNOTATION_VERSION))
             continue
 
+        src = doc['_source']
+
+        # Remove invalid surrogate characters
+        raw_text = src.get('text_plain', '').encode('utf-8', 'ignore').decode('utf-8')
+
         output_doc = {}
+
+        # Anonymize email addresses
+        if anonymize:
+            raw_text = email_regex.sub(email_replacement, raw_text)
+            output_doc['text_plain'] = raw_text
+
+            src['headers'] = {k: src['headers'][k] for k in src['headers']
+                              if src['headers'][k] and k in {'message_id', 'subject', 'from', 'to', 'cc',
+                                                             'in_reply_to', 'references', 'list_id'}}
+            for h in src['headers']:
+                # Keep only email address in certain headers
+                if h in {'cc', 'to'}:
+                    if type(src['headers'][h]) is not list:
+                        src['headers'][h] = [src['headers'][h]]
+                    src['headers'][h] = [extract_email_addr(x) for x in src['headers'][h]]
+                elif h in {'from', 'from_email', 'in_reply_to'}:
+                    src['headers'][h] = extract_email_addr(src['headers'][h])
+
+                if type(src['headers'][h]) is list:
+                    src['headers'][h] = [email_regex.sub(email_replacement, x) for x in src['headers'][h]]
+                elif h != 'list_id':
+                    src['headers'][h] = email_regex.sub(email_replacement, src['headers'][h])
+
+            output_doc['headers'] = src['headers']
 
         stats = defaultdict(lambda: {'num': 0, 'chars': 0, 'lines': 0, 'avg_len': 0.0})
         occurrences = defaultdict(lambda: 0)
 
-        raw_text = doc.get('_source', {}).get('text_plain', '')
+        # Segment message, but  skip overly long texts to avoid running out of memory
+        if len(raw_text) <= 100000:
+            try:
+                logger.debug('Segmenting message')
+                label_gen = predict_raw_text(segmentation_model, raw_text)
+            except Exception as e:
+                logger.error('Error segmenting message: {}'.format(e))
+                label_gen = []
 
-        # Skip overly long texts to avoid running out of memory
-        if len(raw_text) > 70000:
-            logger.warning('Skipping overly long message.')
-            continue
+            # Calculate segment stats and extract main content
+            logger.debug('Calculating segment stats')
+            main_content = ''
+            output_doc['segments'] = []
+            for begin, end, label in mail_classification.line_labels_to_char_pos(label_gen):
+                if label in ['paragraph', 'section_heading']:
+                    main_content += raw_text[begin:end]
 
-        logger.debug('Segmenting message')
-        lines = list(predict_raw_text(segmentation_model, raw_text))
-        labels = mail_classification.line_labels_to_char_pos(lines)
+                stats[label]['num'] += 1
+                stats[label]['chars'] += end - begin
+                stats[label]['lines'] += raw_text[begin:end].count('\n')
+                occurrences[label] += 1
 
-        logger.debug('Calculating segment stats')
-        main_content = ''
-        output_doc['segments'] = []
-        for begin, end, label in labels:
-            if label in ['paragraph', 'section_heading']:
-                main_content += raw_text[begin:end]
+                output_doc['segments'].append({'begin': begin, 'end': end, 'label': label})
 
-            stats[label]['num'] += 1
-            stats[label]['chars'] += end - begin
-            stats[label]['lines'] += raw_text[begin:end].count('\n')
-            occurrences[label] += 1
+            # Collapse newlines to a maximum of two
+            main_content = re.sub(r'\n{3,}', '\n\n', main_content).rstrip()
 
-            output_doc['segments'].append({'label': label, 'begin': begin, 'end': end})
+            output_doc['main_content'] = main_content
 
-        main_content = re.sub(r'\n{3,}', '\n\n', main_content).rstrip()
+            for label in stats:
+                stats[label]['avg_len'] = stats[label]['chars'] / occurrences[label]
 
-        # Remove any invalid surrogates
-        main_content = main_content.encode('utf-8', 'replace').decode('utf-8')
+            stats['paragraph_quotation'] = {
+                'num_ratio': (stats['paragraph']['num'] / stats['quotation']['num'])
+                if stats['quotation']['num'] > 0 else -1,
 
-        for label in stats:
-            stats[label]['avg_len'] = stats[label]['chars'] / occurrences[label]
+                'lines_ratio': (stats['paragraph']['lines'] / stats['quotation']['lines'])
+                if stats['quotation']['lines'] > 0 else -1,
+            }
 
-        stats['paragraph_quotation'] = {
-            'num_ratio': (stats['paragraph']['num'] / stats['quotation']['num'])
-            if stats['quotation']['num'] > 0 else -1,
+            output_doc['label_stats'] = dict(stats)
 
-            'lines_ratio': (stats['paragraph']['lines'] / stats['quotation']['lines'])
-            if stats['quotation']['lines'] > 0 else -1,
-        }
+            # Improve language prediction by making use of content segmentation
+            if len(main_content) > 15:
+                logger.debug('Detecting language')
+                output_doc['lang'] = nlp(main_content)._.language['language']
+        else:
+            logger.warning('Skipped overly long message ({} bytes).'.format(len(raw_text)))
 
-        output_doc['label_stats'] = dict(stats)
-
-        # Extract arg lexicon classes
-        if kwargs.get('arg_lexicon'):
-            arg_classes = {}
-
-            logger.debug('Matching against arguing lexicon')
-            for regex, regex_text, cls in kwargs.get('arg_lexicon'):
-                if cls in arg_classes:
-                    continue
-                if regex.search(main_content) is not None:
-                    arg_classes[cls] = regex_text
-
-            output_doc['arg_classes'] = list(arg_classes.keys())
-            output_doc['arg_classes_matched_regex'] = list(arg_classes.values())
-
-        # Improve language prediction by making use of content segmentation
-        if len(main_content) > 15:
-            logger.debug('Detecting language')
-            output_doc['lang'] = nlp(main_content)._.language['language']
-
-        topics = set()
-        if kwargs.get('args_topic_models'):
-            logger.debug('Detecting topics')
-            for tm in kwargs.get('args_topic_models'):
-                topics.update([t for t, v in tm.process(main_content, False).items() if v >= 0.15])
-        output_doc['topics'] = list(topics)
-
-        output_doc['main_content'] = main_content
         output_doc['annotation_version'] = ANNOTATION_VERSION
         output_doc['@modified'] = int(time() * 1000)
 
