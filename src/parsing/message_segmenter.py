@@ -291,7 +291,7 @@ def train_model(training_data, output_model, loss_function='categorical_crossent
     #                             callbacks=effective_callbacks)
 
 
-def predict_raw_text(segmentation_model, message, chunk_size=15000):
+def predict_raw_text(segmentation_model, message, chunk_size=3000):
     """
     Predict segments of raw message text.
 
