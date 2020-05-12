@@ -19,14 +19,18 @@ def get_logger(name=''):
     return logger
 
 
-def get_spark_context(app_name, job_desc=None):
+def get_spark_context(app_name, job_desc=None, additional_conf=None):
     """
     :param app_name: Spark application name
     :param job_desc: Spark job description
+    :param additional_conf: Additional Spark configuration
     :return: Spark context
     """
     conf = pyspark.SparkConf()
     conf.setAppName(app_name)
+    if additional_conf is not None:
+        for c in additional_conf:
+            conf.set(c, additional_conf[c])
     sc = pyspark.SparkContext(conf=conf)
     sc.setLogLevel('INFO')
     if job_desc:

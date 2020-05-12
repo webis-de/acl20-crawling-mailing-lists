@@ -122,8 +122,9 @@ def start_indexer(index, segmentation_model, fasttext_model, **kwargs):
         ]
     })
 
-    sc = util.get_spark_context('Mail Annotation Indexer')
-    sc.range(0, kwargs.get('scroll_slices', 2)).foreach(
+    slices = kwargs.get('scroll_slices', 2)
+    sc = util.get_spark_context('Mail Annotation Indexer', additional_conf={'spark.default.parallelism': slices})
+    sc.range(0, slices).foreach(
         partial(_start_spark_worker, index=index, segmentation_model=segmentation_model,
                 fasttext_model=fasttext_model, **kwargs))
 
