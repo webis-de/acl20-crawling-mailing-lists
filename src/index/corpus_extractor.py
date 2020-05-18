@@ -75,15 +75,14 @@ def _retrieve_messages(slice_id, max_slices, scroll_size, index):
             for doc in batch:
                 out_doc = doc['_source'].copy()
 
-                # Rename fields
-                out_doc['id'] = doc['_id']
+                # Rename, and filter fields
                 out_doc['headers'] = {k: v for k, v in out_doc['headers'].items()if v and k in (
                     'message_id', 'from', 'to', 'cc', 'in_reply_to', 'references', 'subject', 'list_id'
                 )}
                 out_doc['headers']['date'] = out_doc.pop('@timestamp')
                 out_doc['group'] = out_doc.pop('groupname')
 
-                yield out_doc['group'], out_doc
+                yield doc['_id'], out_doc
 
             logger.info('Retrieving next batch (slice {}/{})'.format(slice_id, max_slices))
             results = util.es_retry(es.scroll, scroll_id=results['_scroll_id'], scroll='3h', request_timeout=360)
@@ -98,7 +97,7 @@ def _write_to_gzip_files(part_id, batch, output_dir):
 
     f = None
     try:
-        for i, (groupname, message) in enumerate(batch):
+        for i, (doc_id, message) in enumerate(batch):
             if i == 0:
                 # Do not create file before starting to write anything to it
                 f = gzip.open(out_filename, 'wb', compresslevel=9)
@@ -107,8 +106,8 @@ def _write_to_gzip_files(part_id, batch, output_dir):
                 f.close()
                 f = gzip.open(out_filename, 'ab', compresslevel=9)
 
-            message = json.dumps(message) + '\n'
-            f.write(message.encode())
+            action = {'index': {'_id': doc_id}}
+            f.write('\n'.join((json.dumps(action), json.dumps(message), '')).encode())
     finally:
         if f is not None:
             f.close()
