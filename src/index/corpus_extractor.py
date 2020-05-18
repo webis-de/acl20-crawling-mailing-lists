@@ -77,8 +77,10 @@ def _retrieve_messages(slice_id, max_slices, scroll_size, index):
 
                 # Rename fields
                 out_doc['id'] = doc['_id']
+                out_doc['headers'] = {k: v for k, v in out_doc['headers'].items()if v and k in (
+                    'message_id', 'from', 'to', 'cc', 'in_reply_to', 'references', 'subject', 'list_id'
+                )}
                 out_doc['headers']['date'] = out_doc.pop('@timestamp')
-                out_doc['headers'] = {k: v for k, v in out_doc['headers'].items() if v}
                 out_doc['group'] = out_doc.pop('groupname')
 
                 yield out_doc['group'], out_doc
@@ -97,7 +99,6 @@ def _write_to_gzip_files(part_id, batch, output_dir):
     f = None
     try:
         for i, (groupname, message) in enumerate(batch):
-            message_bytes = json.dumps(message).encode()
             if i == 0:
                 # Do not create file before starting to write anything to it
                 f = gzip.open(out_filename, 'wb', compresslevel=9)
@@ -106,7 +107,8 @@ def _write_to_gzip_files(part_id, batch, output_dir):
                 f.close()
                 f = gzip.open(out_filename, 'ab', compresslevel=9)
 
-            f.write(message_bytes)
+            message = json.dumps(message) + '\n'
+            f.write(message.encode())
     finally:
         if f is not None:
             f.close()
