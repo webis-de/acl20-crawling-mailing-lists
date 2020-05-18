@@ -12,6 +12,6 @@ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-2.2.0
 scikit-learn
 scipy
 setuptools
-tensorflow>=2.1.0,<2.2.0
+tensorflow>=2.1.0,<=2.2.0
 tqdm
 warcio
