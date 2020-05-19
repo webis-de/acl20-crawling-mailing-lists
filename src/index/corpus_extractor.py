@@ -64,7 +64,7 @@ def _retrieve_messages(slice_id, max_slices, scroll_size, index):
             "slice": {
                 "id": slice_id,
                 "max": max_slices,
-                "field": "@timestamp"
+                "field": "id_hash"
             }
         })
 

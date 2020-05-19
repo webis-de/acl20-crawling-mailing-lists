@@ -48,23 +48,24 @@ def index_directory(input_dir, index):
 
     if not es.indices.exists(index=index):
         es.indices.create(index=index, body={
-            'settings': {
-                'number_of_replicas': 0,
-                'number_of_shards': 30
+            "settings": {
+                "number_of_replicas": 0,
+                "number_of_shards": 30
             },
-            'mappings': {
-                'message': {
-                    'properties': {
-                        '@timestamp': {'type': 'date', 'format': 'yyyy-MM-dd HH:mm:ssZZ'},
-                        '@modified': {'type': 'date', 'format': 'epoch_millis'},
-                        'groupname': {'type': 'keyword'},
-                        'warc_file': {'type': 'keyword'},
-                        'warc_offset': {'type': 'long'},
-                        'warc_id': {'type': 'keyword'},
-                        'news_url': {'type': 'keyword'},
-                        'lang': {'type': 'keyword'},
-                        'text_plain': {'type': 'text'},
-                        'text_html': {'type': 'text'}
+            "mappings": {
+                "message": {
+                    "properties": {
+                        "@timestamp": {"type": "date", "format": "yyyy-MM-dd HH:mm:ssZZ"},
+                        "@modified": {"type": "date", "format": "epoch_millis"},
+                        "id_hash": {"type": "long"},
+                        "groupname": {"type": "keyword"},
+                        "warc_file": {"type": "keyword"},
+                        "warc_offset": {"type": "long"},
+                        "warc_id": {"type": "keyword"},
+                        "news_url": {"type": "keyword"},
+                        "lang": {"type": "keyword"},
+                        "text_plain": {"type": "text"},
+                        "text_html": {"type": "text"}
                     }
                 }
             }
@@ -154,46 +155,47 @@ def _generate_docs(index, filename, nlp, counter):
             counter.add(1)
 
             yield {
-                '_index': index,
-                '_type': 'message',
-                '_id': doc_id,
-                '_op_type': 'update',
-                'scripted_upsert': True,
-                'script': {
-                    'source': '''
+                "_index": index,
+                "_type": "message",
+                "_id": doc_id,
+                "_op_type": "update",
+                "scripted_upsert": True,
+                "script": {
+                    "source": """
                         if (ctx._source.containsKey("lang")) {
                             params.doc.remove("lang");
                         }
                         ctx._source.putAll(params.doc);                    
-                    ''',
-                    'params': {
-                        'doc': {
-                            '@timestamp': mail_date,
-                            '@modified': int(time() * 1000),
-                            'groupname': os.path.basename(os.path.dirname(filename)),
-                            'warc_file': os.path.join(os.path.basename(os.path.dirname(filename)),
+                    """,
+                    "params": {
+                        "doc": {
+                            "@timestamp": mail_date,
+                            "@modified": int(time() * 1000),
+                            "id_hash": hash(doc_id),
+                            "groupname": os.path.basename(os.path.dirname(filename)),
+                            "warc_file": os.path.join(os.path.basename(os.path.dirname(filename)),
                                                       os.path.basename(filename)),
-                            'warc_offset': iterator.offset,
-                            'warc_id': doc_id,
-                            'news_url': warc_headers.get_header('WARC-News-URL'),
-                            'headers': {
-                                'message_id': mail_headers.get('message-id'),
-                                'from': from_header,
-                                'from_email': from_email.group(0) if from_email is not None else '',
-                                'subject': mail_headers.get('subject'),
-                                'to': split_header('to', mail_headers),
-                                'cc': split_header('cc', mail_headers),
-                                'in_reply_to': split_header('in-reply-to', mail_headers),
-                                'references': split_header('references', mail_headers, split_regex=r'\s'),
-                                'list_id': mail_headers.get('list-id')
+                            "warc_offset": iterator.offset,
+                            "warc_id": doc_id,
+                            "news_url": warc_headers.get_header("WARC-News-URL"),
+                            "headers": {
+                                "message_id": mail_headers.get("message-id"),
+                                "from": from_header,
+                                "from_email": from_email.group(0) if from_email is not None else "",
+                                "subject": mail_headers.get("subject"),
+                                "to": split_header("to", mail_headers),
+                                "cc": split_header("cc", mail_headers),
+                                "in_reply_to": split_header("in-reply-to", mail_headers),
+                                "references": split_header("references", mail_headers, split_regex=r"\s"),
+                                "list_id": mail_headers.get("list-id")
                             },
-                            'lang': lang,
-                            'text_plain': mail_text,
-                            'text_html': mail_html
+                            "lang": lang,
+                            "text_plain": mail_text,
+                            "text_html": mail_html
                         }
                     }
                 },
-                'upsert': {}
+                "upsert": {}
             }
 
 

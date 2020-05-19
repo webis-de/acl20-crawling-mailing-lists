@@ -22,7 +22,7 @@ from parsing.message_segmenter import load_fasttext_model, predict_raw_text
 from util import mail_classification, util
 
 
-ANNOTATION_VERSION = 10
+ANNOTATION_VERSION = 11
 
 logger = util.get_logger(__name__)
 
@@ -58,7 +58,6 @@ def start_indexer(index, segmentation_model, fasttext_model, **kwargs):
     :param index: Elasticsearch index
     :param segmentation_model: HDF5 Email Segmentation model
     :param fasttext_model: fastText email embedding
-    :param slices: number of Elasticsearch scroll slices to process in parallel
 
     Keyword Args:
         dry_run (bool): Perform dry run, do not actually index anything
@@ -75,46 +74,46 @@ def start_indexer(index, segmentation_model, fasttext_model, **kwargs):
 
     logger.info('Updating Elasticsearch index mapping')
     es.indices.put_mapping(index=index, doc_type='message', body={
-        'properties': {
-            'main_content': {
-                'type': 'text'
+        "properties": {
+            "main_content": {
+                "type": "text"
             },
-            'segments': {
-                'type': 'nested',
-                'properties': {
-                    'begin': {
-                        'type': 'integer'
+            "segments": {
+                "type": "nested",
+                "properties": {
+                    "begin": {
+                        "type": "integer"
                     },
-                    'end': {
-                        'type': 'integer'
+                    "end": {
+                        "type": "integer"
                     },
-                    'label': {
-                        'type': 'keyword'
+                    "label": {
+                        "type": "keyword"
                     },
                 }
             },
-            'label_stats': {
-                'properties': {
-                    'paragraph_quotation.num_ratio': {'type': 'float'},
-                    'paragraph_quotation.lines_ratio': {'type': 'float'}
+            "label_stats": {
+                "properties": {
+                    "paragraph_quotation.num_ratio": {"type": "float"},
+                    "paragraph_quotation.lines_ratio": {"type": "float"}
                 }
             },
-            'annotation_version': {
-                'type': 'short'
+            "annotation_version": {
+                "type": "short"
             }
         },
-        'dynamic': True,
-        'dynamic_templates': [
+        "dynamic": True,
+        "dynamic_templates": [
             {
-                'stats': {
-                    'path_match': 'label_stats.*',
-                    'mapping': {
-                        'type': 'object',
-                        'properties': {
-                            'num': {'type': 'integer'},
-                            'chars': {'type': 'integer'},
-                            'lines': {'type': 'integer'},
-                            'avg_len': {'type': 'float'}
+                "stats": {
+                    "path_match": "label_stats.*",
+                    "mapping": {
+                        "type": "object",
+                        "properties": {
+                            "num": {"type": "integer"},
+                            "chars": {"type": "integer"},
+                            "lines": {"type": "integer"},
+                            "avg_len": {"type": "float"}
                         }
                     }
                 }
@@ -125,6 +124,7 @@ def start_indexer(index, segmentation_model, fasttext_model, **kwargs):
     slices = kwargs.get('scroll_slices', 2)
     sc = util.get_spark_context('Mail Annotation Indexer', additional_conf={'spark.default.parallelism': slices})
     rdd = sc.range(0, slices)
+    rdd = rdd.repartition(slices)
     rdd.foreach(partial(_start_spark_worker, index=index, segmentation_model=segmentation_model,
                         fasttext_model=fasttext_model, **kwargs))
 
@@ -157,7 +157,7 @@ def _start_spark_worker(slice_id, index, segmentation_model, fasttext_model, **k
         'slice': {
             'id': slice_id,
             'max': max_slices,
-            'field': '@timestamp'
+            'field': 'id_hash'
         },
         'query': {
             'bool': {
