@@ -73,7 +73,7 @@ def start_indexer(index, segmentation_model, fasttext_model, **kwargs):
         raise RuntimeError('Index has to exist.')
 
     logger.info('Updating Elasticsearch index mapping')
-    es.indices.put_mapping(index=index, doc_type='message', body={
+    es.indices.put_mapping(index=index, body={
         "properties": {
             "main_content": {
                 "type": "text"
@@ -108,7 +108,6 @@ def start_indexer(index, segmentation_model, fasttext_model, **kwargs):
                 "stats": {
                     "path_match": "label_stats.*",
                     "mapping": {
-                        "type": "object",
                         "properties": {
                             "num": {"type": "integer"},
                             "chars": {"type": "integer"},
@@ -162,7 +161,7 @@ def _start_spark_worker(slice_id, index, segmentation_model, fasttext_model, **k
         'query': {
             'bool': {
                 "must": {
-                    "wildcard": {"groupname": "gmane.*"}
+                    "wildcard": {"group": "gmane.*"}
                 },
                 'must_not': {
                     'range': {'annotation_version': {'gte': ANNOTATION_VERSION}}
@@ -319,7 +318,7 @@ def _generate_docs(batch, index, segmentation_model, nlp, progress_bar=False, an
             logger.warning('Skipped overly long message ({} bytes).'.format(len(raw_text)))
 
         output_doc['annotation_version'] = ANNOTATION_VERSION
-        output_doc['@modified'] = int(time() * 1000)
+        output_doc['modified'] = int(time() * 1000)
 
         yield {
             '_op_type': 'update',

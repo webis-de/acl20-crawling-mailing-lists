@@ -53,20 +53,22 @@ def index_directory(input_dir, index):
                 "number_of_shards": 30
             },
             "mappings": {
-                "message": {
-                    "properties": {
-                        "@timestamp": {"type": "date", "format": "yyyy-MM-dd HH:mm:ssZZ"},
-                        "@modified": {"type": "date", "format": "epoch_millis"},
-                        "id_hash": {"type": "long"},
-                        "groupname": {"type": "keyword"},
-                        "warc_file": {"type": "keyword"},
-                        "warc_offset": {"type": "long"},
-                        "warc_id": {"type": "keyword"},
-                        "news_url": {"type": "keyword"},
-                        "lang": {"type": "keyword"},
-                        "text_plain": {"type": "text"},
-                        "text_html": {"type": "text"}
-                    }
+                "properties": {
+                    "modified": {"type": "date", "format": "epoch_millis"},
+                    "headers": {
+                        "properties": {
+                            "date": {"type": "date", "format": "yyyy-MM-dd HH:mm:ssXXX"}
+                        }
+                    },
+                    "id_hash": {"type": "long"},
+                    "group": {"type": "keyword"},
+                    "warc_file": {"type": "keyword"},
+                    "warc_offset": {"type": "long"},
+                    "warc_id": {"type": "keyword"},
+                    "news_url": {"type": "keyword"},
+                    "lang": {"type": "keyword"},
+                    "text_plain": {"type": "text"},
+                    "text_html": {"type": "text"}
                 }
             }
         })
@@ -142,6 +144,9 @@ def _generate_docs(index, filename, nlp, counter):
                 d = email.utils.parsedate_to_datetime(mail_headers.get('date'))
                 if not d.tzinfo or d.tzinfo.utcoffset(d) is None:
                     d = pytz.utc.localize(d)
+                # Convert offset outside +/-18:00 to UTC+0, since they would throw errors in Java's DateTime parser.
+                if abs(d.utcoffset().total_seconds()) > 18 * 60 * 60:
+                    d = d.astimezone(pytz.utc)
                 mail_date = str(d)
             except TypeError:
                 mail_date = None
@@ -165,20 +170,20 @@ def _generate_docs(index, filename, nlp, counter):
                         if (ctx._source.containsKey("lang")) {
                             params.doc.remove("lang");
                         }
-                        ctx._source.putAll(params.doc);                    
+                        ctx._source.putAll(params.doc);
                     """,
                     "params": {
                         "doc": {
-                            "@timestamp": mail_date,
-                            "@modified": int(time() * 1000),
+                            "modified": int(time() * 1000),
                             "id_hash": hash(doc_id),
-                            "groupname": os.path.basename(os.path.dirname(filename)),
+                            "group": os.path.basename(os.path.dirname(filename)),
                             "warc_file": os.path.join(os.path.basename(os.path.dirname(filename)),
                                                       os.path.basename(filename)),
                             "warc_offset": iterator.offset,
                             "warc_id": doc_id,
                             "news_url": warc_headers.get_header("WARC-News-URL"),
                             "headers": {
+                                "date": mail_date,
                                 "message_id": mail_headers.get("message-id"),
                                 "from": from_header,
                                 "from_email": from_email.group(0) if from_email is not None else "",

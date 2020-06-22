@@ -26,20 +26,20 @@
                         {
                             "query_string": {
                                 "analyze_wildcard": true,
-                                "query": "groupname:(*.patches OR *.commits* OR *.dist-commits* OR *.version-control* OR *.git* OR *.cvs* OR *.svn* OR *.trunk* OR *.scm* OR *.pkg*) OR (groupname:(*.bugs* OR *.issues* OR *.bugzilla* OR *.codereview*) OR  headers.subject.keyword:(*jira* OR *bugzilla*) OR headers.from_email.keyword:(*bugs* OR *bugzilla* OR *jira* OR *jboss*))"
+                                "query": "group:(*.patches OR *.commits* OR *.dist-commits* OR *.version-control* OR *.git* OR *.cvs* OR *.svn* OR *.trunk* OR *.scm* OR *.pkg*) OR (group:(*.bugs* OR *.issues* OR *.bugzilla* OR *.codereview*) OR  headers.subject.keyword:(*jira* OR *bugzilla*) OR headers.from_email.keyword:(*bugs* OR *bugzilla* OR *jira* OR *jboss*))"
                             }
                         }
                     ],
                     "must": {"term": {"lang": "en"}},
                     "minimum_should_match": 1,
                     "should": [
-                        {"wildcard": {"groupname": "gmane.culture.*"}},
-                        {"wildcard": {"groupname": "gmane.politics.*"}},
-                        {"wildcard": {"groupname": "gmane.science.*"}},
-                        {"wildcard": {"groupname": "gmane.education.*"}},
-                        {"wildcard": {"groupname": "gmane.music.*"}},
-                        {"wildcard": {"groupname": "gmane.games.*"}},
-                        {"wildcard": {"groupname": "gmane.recreation.*"}}
+                        {"wildcard": {"group": "gmane.culture.*"}},
+                        {"wildcard": {"group": "gmane.politics.*"}},
+                        {"wildcard": {"group": "gmane.science.*"}},
+                        {"wildcard": {"group": "gmane.education.*"}},
+                        {"wildcard": {"group": "gmane.music.*"}},
+                        {"wildcard": {"group": "gmane.games.*"}},
+                        {"wildcard": {"group": "gmane.recreation.*"}}
                     ]
                 }
             }

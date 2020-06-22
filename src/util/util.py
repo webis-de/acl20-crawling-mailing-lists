@@ -193,7 +193,7 @@ def retrieve_email_thread(es, index, message_id, restrict_to_same_group=True):
             }
         },
         'sort': {
-            '@timestamp': {'order': 'asc'}
+            'headers.date': {'order': 'asc'}
         }
     }
 
@@ -209,7 +209,7 @@ def retrieve_email_thread(es, index, message_id, restrict_to_same_group=True):
             break
 
         if not must_clause and restrict_to_same_group:
-            must_clause.append({'term': {'groupname': hits[0]['_source']['groupname']}})
+            must_clause.append({'term': {'group': hits[0]['_source']['group']}})
 
         references = set()
         for hit in hits:

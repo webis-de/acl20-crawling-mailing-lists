@@ -54,9 +54,9 @@ def main(index, output_file, **kwargs):
                                     "query_string": {
                                         "analyze_wildcard": True,
                                         "default_field": "*",
-                                        "query": """groupname:(*.patches OR *.commits* OR
+                                        "query": """group:(*.patches OR *.commits* OR
                                             *.dist-commits* OR *.version-control* OR *.git* OR *.cvs* OR *.svn*
-                                            OR *.trunk* OR *.scm* OR *.pkg*) OR (groupname:(*.bugs* OR *.issues*
+                                            OR *.trunk* OR *.scm* OR *.pkg*) OR (group:(*.bugs* OR *.issues*
                                             OR *.bugzilla* OR *.codereview*) OR 
                                             headers.subject.keyword:(*jira* OR *bugzilla*) OR
                                             headers.from_email.keyword:(*bugs* OR *bugzilla* OR *jira* OR *jboss*))"""
@@ -66,13 +66,13 @@ def main(index, output_file, **kwargs):
                             "must": {"term": {"lang": "en"}},
                             "minimum_should_match": 1,
                             "should": [
-                                {"wildcard": {"groupname": "gmane.culture.*"}},
-                                {"wildcard": {"groupname": "gmane.politics.*"}},
-                                {"wildcard": {"groupname": "gmane.science.*"}},
-                                {"wildcard": {"groupname": "gmane.education.*"}},
-                                {"wildcard": {"groupname": "gmane.music.*"}},
-                                {"wildcard": {"groupname": "gmane.games.*"}},
-                                {"wildcard": {"groupname": "gmane.recreation.*"}}
+                                {"wildcard": {"group": "gmane.culture.*"}},
+                                {"wildcard": {"group": "gmane.politics.*"}},
+                                {"wildcard": {"group": "gmane.science.*"}},
+                                {"wildcard": {"group": "gmane.education.*"}},
+                                {"wildcard": {"group": "gmane.music.*"}},
+                                {"wildcard": {"group": "gmane.games.*"}},
+                                {"wildcard": {"group": "gmane.recreation.*"}}
                             ]
                         }
                     }
@@ -112,10 +112,10 @@ def main(index, output_file, **kwargs):
                     src = hit['_source']
                     text_plain = src['text_plain']
 
-                    prev_samples = sampled_groups.get(src['groupname'], 0)
+                    prev_samples = sampled_groups.get(src['group'], 0)
                     if kwargs['group_limit'] and prev_samples > kwargs['group_limit']:
                         continue
-                    sampled_groups[src['groupname']] = prev_samples + 1
+                    sampled_groups[src['group']] = prev_samples + 1
 
                     num_samples += 1
                     progress_bar.update()

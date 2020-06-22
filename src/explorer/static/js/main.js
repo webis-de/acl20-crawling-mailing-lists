@@ -173,8 +173,8 @@
                 warc_id: hits[hit]['_id'],
                 warc_file: source['warc_file'],
                 warc_offset: source['warc_offset'],
-                timestamp: source['@timestamp'],
-                groupname: source['groupname'],
+                timestamp: source['headers']['date'],
+                group: source['group'],
                 news_url: source['news_url']
             }));
             grid.appendChild(warcHeaders);

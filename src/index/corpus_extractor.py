@@ -55,12 +55,12 @@ def _retrieve_messages(slice_id, max_slices, scroll_size, index):
                 "bool": {
                     "must": [
                         {"range": {"annotation_version": {"gte": ANNOTATION_VERSION}}},
-                        {"wildcard": {"groupname": "gmane.*"}}
+                        {"wildcard": {"group": "gmane.*"}}
                     ]
                 }
             },
-            "sort": ["groupname", "@timestamp"],
-            "_source": ["groupname", "@timestamp", "lang", "headers", "text_plain", "segments"],
+            "sort": ["group", "headers.date"],
+            "_source": ["group", "lang", "headers", "text_plain", "segments"],
             "slice": {
                 "id": slice_id,
                 "max": max_slices,
@@ -74,14 +74,9 @@ def _retrieve_messages(slice_id, max_slices, scroll_size, index):
 
             for doc in batch:
                 out_doc = doc['_source'].copy()
-
-                # Rename, and filter fields
                 out_doc['headers'] = {k: v for k, v in out_doc['headers'].items()if v and k in (
-                    'message_id', 'from', 'to', 'cc', 'in_reply_to', 'references', 'subject', 'list_id'
+                    'date', 'message_id', 'from', 'to', 'cc', 'in_reply_to', 'references', 'subject', 'list_id'
                 )}
-                out_doc['headers']['date'] = out_doc.pop('@timestamp')
-                out_doc['group'] = out_doc.pop('groupname')
-
                 yield doc['_id'], out_doc
 
             logger.info('Retrieving next batch (slice {}/{})'.format(slice_id, max_slices))
@@ -96,20 +91,24 @@ def _write_to_gzip_files(part_id, batch, output_dir):
     out_filename = os.path.join(output_dir, f'part-{part_id:04d}.ndjson.gz')
 
     f = None
+    l = None
     try:
         for i, (doc_id, message) in enumerate(batch):
             if i == 0:
                 # Do not create file before starting to write anything to it
-                f = gzip.open(out_filename, 'wb', compresslevel=9)
+                f = open(out_filename, 'wb')
+                l = gzip.open(f, 'w', compresslevel=9)
             elif i % 1000 == 0:
-                # Start new gzip member segment every 1k lines
-                f.close()
-                f = gzip.open(out_filename, 'ab', compresslevel=9)
+                l.close()
+                f.flush()
+                l = gzip.open(f, 'w', compresslevel=9)
 
             action = {'index': {'_id': doc_id}}
-            f.write('\n'.join((json.dumps(action), json.dumps(message), '')).encode())
+            data_bytes = '\n'.join((json.dumps(action), json.dumps(message), '')).encode()
+            l.write(data_bytes)
     finally:
         if f is not None:
+            l.close()
             f.close()
 
     return []
