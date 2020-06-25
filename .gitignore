@@ -1,6 +1,5 @@
 # Data
 archives
-*.jsonl
 data
 
 # IDE
