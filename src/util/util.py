@@ -5,7 +5,13 @@ import re
 import unicodedata
 
 from elasticsearch import Elasticsearch, ConnectionError as ESConnectionError
-import pyspark
+# import pyspark
+
+from conf.settings import *
+try:
+    from conf.local_settings import *
+except ModuleNotFoundError:
+    pass
 
 
 def get_logger(name=''):
@@ -42,8 +48,7 @@ def get_es_client():
     """
     :return: Configured Elasticsearch client
     """
-    return Elasticsearch(['betaweb015', 'betaweb017', 'betaweb020'],
-                         sniff_on_start=True, sniff_on_connection_fail=True, timeout=360)
+    return Elasticsearch(ES_SEED_HOSTS, **ES_CONNECTION_PROPERTIES, timeout=360)
 
 
 def load_arglex(arglex_dir):

@@ -1,3 +1,6 @@
+# Config
+local_settings.py
+
 # Data
 archives
 data

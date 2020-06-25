@@ -39,8 +39,8 @@ Pre-trained Fasttext and Tensorflow models can be found at [files.webis.de](http
 
 ### Corpus Explorer
 A web UI for data exploration can be found in `src/explorer/explorer.py`.
-Before starting it, copy the main config file `src/explorer/conf/settings.py` to
-`src/explorer/conf/local_settings.py` and adjust the config values (e.g. set the
+Before starting it, copy the main config file `src/conf/settings.py` to
+`src/conf/local_settings.py` and adjust the config values (e.g. set the
 correct model paths etc.)
 
 The corpus explorer can be started using the `run.sh` script as follows:
@@ -70,3 +70,5 @@ The following tools are available:
     - `message_segmenter_svm.py`: Legacy email message segmentation model based on Tang et al., 2005
 - `util/`:
     - Various other tools and libraries (see `--help` listings and doc strings)
+
+All indexing scripts need a valid Elasticsearch configuration. See the [Corpus Explorer](#Corpus-Explorer) section for details. 

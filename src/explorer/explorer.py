@@ -13,8 +13,7 @@ app = Flask(__name__)
 app.config.from_object('conf.settings')
 app.config.from_object('conf.local_settings')
 
-es = Elasticsearch(app.config.get('ES_SEED_HOSTS'), sniff_on_start=True,
-                   sniff_on_connection_fail=True, timeout=140)
+es = Elasticsearch(app.config.get('ES_SEED_HOSTS'), **app.config.get('ES_CONNECTION_PROPERTIES'), timeout=140)
 load_fasttext_model(app.config.get('FASTTEXT_MODEL'))
 line_model = models.load_model(app.config.get('SEGMENTER_MODEL'))
 
