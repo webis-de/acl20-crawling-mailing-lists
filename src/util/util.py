@@ -5,7 +5,7 @@ import re
 import unicodedata
 
 from elasticsearch import Elasticsearch, ConnectionError as ESConnectionError
-# import pyspark
+import pyspark
 
 from conf.settings import *
 try:
