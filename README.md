@@ -61,7 +61,7 @@ For individual usage instructions, run
 The following tools are available:
 
 - `index/`
-    - `corpus_extractpr.py`: Extractor for assembling final corpus
+    - `corpus_extractor.py`: Extractor for assembling final corpus
     - `mail_sampler.py`: Sample emails from Elasticsearch index
     - `message_index_annotator.py`: Segment and annotate message in an existing Elasticsearch index
     - `warc_indexer.py`: Index email WARC into Elasticsearch
